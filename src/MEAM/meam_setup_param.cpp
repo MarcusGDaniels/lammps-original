@@ -19,6 +19,7 @@
 #include <cmath>
 
 using namespace LAMMPS_NS;
+using namespace MEAM_NS;
 using MathConst::MY_PI;
 
 //     do a sanity check on index parameters

@@ -33,6 +33,7 @@
 #include <memory>
 
 using namespace LAMMPS_NS;
+using namespace MEAM_NS;
 
 static constexpr int MAXLINE = 1024;
 

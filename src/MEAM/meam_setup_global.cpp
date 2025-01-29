@@ -15,6 +15,7 @@
 #include <cmath>
 
 using namespace LAMMPS_NS;
+using namespace MEAM_NS;
 
 template <typename TYPE, int maxi, int maxj>
 static inline void setall2d(TYPE (&arr)[maxi][maxj], const TYPE v)

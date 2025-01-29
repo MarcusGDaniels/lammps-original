@@ -22,6 +22,7 @@
 #include <cmath>
 
 using namespace LAMMPS_NS;
+using namespace MEAM_NS;
 
 //-----------------------------------------------------------------------------
 // Compute G(gamma) based on selection flag ibar:

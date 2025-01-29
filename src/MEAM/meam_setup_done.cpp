@@ -20,6 +20,7 @@
 #include <algorithm>
 
 using namespace LAMMPS_NS;
+using namespace MEAM_NS;
 
 void MEAM::meam_setup_done(double* cutmax)
 {

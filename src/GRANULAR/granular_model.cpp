@@ -409,7 +409,10 @@ bool GranularModel::check_contact()
     radsum = radi;
     if (radj == 0) Reff = radi;
     else Reff = radi * radj / (radi + radj);
-  } else {
+  } else if (contact_type == SURFACE) {
+    // Used by GRANSURF package
+    //   initial definitions of rsq and radj for contact
+    //   detection distinct from those in calculate_forces()
     sub3(xi, xj, dx);
     rsq = lensq3(dx);
     radsum = radi + radj;
@@ -417,6 +420,7 @@ bool GranularModel::check_contact()
   }
 
   touch = normal_model->touch();
+
   return touch;
 }
 
@@ -426,7 +430,13 @@ void GranularModel::calculate_forces()
 {
   // Standard geometric quantities
 
+  if (contact_type == SURFACE) {
+    radsum = radi;
+    Reff = radi;
+  }
+
   if (contact_type != WALLREGION) r = sqrt(rsq);
+
   rinv = 1.0 / r;
   delta = radsum - r;
   dR = delta * Reff;

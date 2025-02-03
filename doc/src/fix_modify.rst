@@ -43,10 +43,12 @@ Examples
 Description
 """""""""""
 
-Modify one or more parameters of a previously defined fix.  Only
-specific fix styles support specific parameters.  See the doc pages
-for individual fix commands for info on which ones support which
-fix_modify parameters.
+Modify one or more parameters of a previously defined fix.  Specific
+fix styles support specific parameters.  See the doc pages of an
+individual fix command for info on which fix_modify keywords it
+supports.  This doc page only describes fix_modify keywords which are
+supported by multiple fixes.  Additional keywords, specific to a
+single fix, are only described on that fix's doc page.
 
 The *temp* keyword is used to determine how a fix computes
 temperature.  The specified compute ID must have been previously
@@ -171,7 +173,6 @@ will have no effect on the motion of the rigid bodies if they are
 specified in the input script after the fix rigid command.  LAMMPS
 will give a warning if that is the case.
 
-
 The *colname* keyword can be used to change the default header keywords
 in output files of fix styles that support it: currently only :doc:`fix
 ave/time <fix_ave_time>` is supported.  The setting for *ID string*
@@ -183,7 +184,6 @@ keyword (or compute, fix, property, or variable reference) and then it
 replaces the string for that specific keyword. The *colname* keyword can
 be used multiple times. If multiple *colname* settings refer to the same
 keyword, the last setting has precedence.
-
 
 Restrictions
 """"""""""""

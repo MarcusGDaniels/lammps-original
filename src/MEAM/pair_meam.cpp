@@ -183,12 +183,12 @@ void PairMEAM::settings(int narg, char ** /*arg*/)
 
   // set comm size needed by this Pair
 
+  comm_forward = 38;
+  comm_reverse = 30;
+
   if (msmeamflag) {
-    comm_forward = 38 + 23;    // plus 23 for msmeam
-    comm_reverse = 30 + 23;    // plus 23 for msmeam
-  } else {
-    comm_forward = 38;
-    comm_reverse = 30;
+    comm_forward += 23;
+    comm_reverse += 23;
   }
 }
 
@@ -209,10 +209,7 @@ void PairMEAM::coeff(int narg, char **arg)
 
   std::string lib_file = utils::get_potential_file_path(arg[2]);
   if (lib_file.empty()) {
-    if (msmeamflag)
-      error->all(FLERR, 2, "Cannot open MS-MEAM library file {}", lib_file);
-    else
-      error->all(FLERR, 2, "Cannot open MEAM library file {}", lib_file);
+    error->all(FLERR, 2, "Cannot open pair style {} library file {}", myname, lib_file);
   }
 
   // find meam parameter file in arguments:
@@ -234,10 +231,7 @@ void PairMEAM::coeff(int narg, char **arg)
     }
   }
   if (paridx < 0) {
-    if (msmeamflag)
-      error->all(FLERR, Error::NOPOINTER, "No MS-MEAM parameter file in pair coefficients");
-    else
-      error->all(FLERR, Error::NOPOINTER, "No MEAM parameter file in pair coefficients");
+    error->all(FLERR, Error::NOPOINTER, "No parameter file in pair style {} coefficients", myname);
   }
   if ((narg - paridx - 1) != atom->ntypes)
     error->all(FLERR, Error::NOPOINTER, "Expected {} but found {} args for pair style {} "

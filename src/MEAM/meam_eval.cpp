@@ -19,21 +19,204 @@
 #include <cmath>
 
 using namespace LAMMPS_NS;
+using namespace MEAM_NS;
 
-void MEAM::meam_force(int i, int eflag_global, int eflag_atom, int vflag_global, int vflag_atom,
+
+/* ----------------------------------------------------------------------
+   Compute energy contribution of the absolute density at each site
+------------------------------------------------------------------------- */
+
+void MEAM::eval_energy(int nlocal, int eflag_either, int eflag_global, int eflag_atom,
+                       double *eng_vdwl, double *eatom, int /*ntype*/, int *type, int *fmap,
+                       double **scale, int &errorflag)
+{
+  int i, elti;
+  int m;
+  double rhob, G, dG, Gbar, dGbar, gam, shp[3], Z;
+  double denom, rho_bkgd, Fl;
+  double scaleii;
+
+  //     Complete the calculation of density
+
+  for (i = 0; i < nlocal; i++) {
+    elti = fmap[type[i]];
+    if (elti >= 0) {
+      scaleii = scale[type[i]][type[i]];
+      if (msmeamflag) {
+        rho1[i] = 0.0;
+        rho2[i] = -1.0 / 3.0 * (arho2b[i] * arho2b[i]
+                              - arho2mb[i] * arho2mb[i]);
+        rho3[i] = 0.0;
+        for (m = 0; m < 3; m++) {
+          rho1[i] = rho1[i] + arho1[i][m] * arho1[i][m]
+                            - arho1m[i][m] * arho1m[i][m];
+          rho3[i] = rho3[i] - 3.0 / 5.0 * (arho3b[i][m] * arho3b[i][m]
+                                           - arho3mb[i][m] * arho3mb[i][m]);
+        }
+        for (m = 0; m < 6; m++) {
+          rho2[i] = rho2[i] + v2D[m] * (arho2[i][m] * arho2[i][m]
+                                        - arho2m[i][m] * arho2m[i][m]);
+        }
+
+        for (m = 0; m < 10; m++) {
+          rho3[i] = rho3[i] + v3D[m] * (arho3[i][m] * arho3[i][m]
+                                        - arho3m[i][m] * arho3m[i][m]);
+        }
+
+        // all the t weights are already accounted for with msmeam
+        gamma[i] = rho1[i] + rho2[i] + rho3[i];
+      } else {
+        rho1[i] = 0.0;
+        rho2[i] = -1.0 / 3.0 * arho2b[i] * arho2b[i];
+        rho3[i] = 0.0;
+        for (m = 0; m < 3; m++) {
+          rho1[i] = rho1[i] + arho1[i][m] * arho1[i][m];
+          rho3[i] = rho3[i] - 3.0 / 5.0 * arho3b[i][m] * arho3b[i][m];
+        }
+        for (m = 0; m < 6; m++) {
+          rho2[i] = rho2[i] + v2D[m] * arho2[i][m] * arho2[i][m];
+        }
+        for (m = 0; m < 10; m++) {
+          rho3[i] = rho3[i] + v3D[m] * arho3[i][m] * arho3[i][m];
+        }
+
+        if (rho0[i] > 0.0) {
+          if (ialloy == 1) {
+            t_ave[i][0] = fdiv_zero(t_ave[i][0], tsq_ave[i][0]);
+            t_ave[i][1] = fdiv_zero(t_ave[i][1], tsq_ave[i][1]);
+            t_ave[i][2] = fdiv_zero(t_ave[i][2], tsq_ave[i][2]);
+          } else if (ialloy == 2) {
+            t_ave[i][0] = t1_meam[elti];
+            t_ave[i][1] = t2_meam[elti];
+            t_ave[i][2] = t3_meam[elti];
+          } else {
+            t_ave[i][0] = t_ave[i][0] / rho0[i];
+            t_ave[i][1] = t_ave[i][1] / rho0[i];
+            t_ave[i][2] = t_ave[i][2] / rho0[i];
+          }
+        }
+
+        gamma[i] = t_ave[i][0] * rho1[i] + t_ave[i][1] * rho2[i] + t_ave[i][2] * rho3[i];
+      }
+      if (rho0[i] > 0.0) {
+        gamma[i] = gamma[i] / (rho0[i] * rho0[i]);
+      }
+
+      Z = get_Zij(lattce_meam[elti][elti]);
+
+      G = G_gam(gamma[i], ibar_meam[elti], errorflag);
+      if (errorflag != 0)
+        return;
+
+      get_shpfcn(lattce_meam[elti][elti], stheta_meam[elti][elti], ctheta_meam[elti][elti], shp);
+
+      if (ibar_meam[elti] <= 0) {
+        Gbar = 1.0;
+        dGbar = 0.0;
+      } else {
+        if (mix_ref_t == 1) {
+          gam = (t_ave[i][0] * shp[0] + t_ave[i][1] * shp[1] + t_ave[i][2] * shp[2]) / (Z * Z);
+        } else {
+          gam = (t1_meam[elti] * shp[0] + t2_meam[elti] * shp[1] + t3_meam[elti] * shp[2]) /
+                (Z * Z);
+        }
+        Gbar = G_gam(gam, ibar_meam[elti], errorflag);
+      }
+      rho[i] = rho0[i] * G;
+
+      // compute background density rho_bkgd
+      if (mix_ref_t == 1) {
+        if (ibar_meam[elti] <= 0) {
+          Gbar = 1.0;
+          dGbar = 0.0;
+        } else {
+          gam = (t_ave[i][0] * shp[0] + t_ave[i][1] * shp[1] + t_ave[i][2] * shp[2]) / (Z * Z);
+          Gbar = dG_gam(gam, ibar_meam[elti], dGbar);
+        }
+        rho_bkgd = rho0_meam[elti] * Z * Gbar;
+      } else {
+        if (bkgd_dyn == 1) {
+          rho_bkgd = rho0_meam[elti] * Z;
+        } else {
+          rho_bkgd = rho_ref_meam[elti];
+        }
+      }
+      rhob = rho[i] / rho_bkgd;
+      denom = 1.0 / rho_bkgd;
+
+      // compute gamma & derivatives
+      G = dG_gam(gamma[i], ibar_meam[elti], dG);
+
+      dgamma1[i] = (G - 2 * dG * gamma[i]) * denom;
+
+      if (!iszero(rho0[i])) {
+        dgamma2[i] = (dG / rho0[i]) * denom;
+      } else {
+        dgamma2[i] = 0.0;
+      }
+
+      //     dgamma3 is nonzero only if we are using the "mixed" rule for
+      //     computing t in the reference system (which is not correct, but
+      //     included for backward compatibility
+      if (mix_ref_t == 1) {
+        dgamma3[i] = rho0[i] * G * dGbar / (Gbar * Z * Z) * denom;
+      } else {
+        dgamma3[i] = 0.0;
+      }
+
+      // finally, the EAM embedding energy
+      Fl = embedding(A_meam[elti], Ec_meam[elti][elti], rhob, frhop[i]);
+      if (eflag_either != 0) {
+        Fl *= scaleii;
+        if (eflag_global != 0) {
+          *eng_vdwl = *eng_vdwl + Fl;
+        }
+        if (eflag_atom != 0) {
+          eatom[i] = eatom[i] + Fl;
+        }
+      }
+    }
+  }
+}
+
+/* ----------------------------------------------------------------------
+   Evaluate phi spline and derivative of pair ind at r
+------------------------------------------------------------------------- */
+
+double MEAM::phi_interpolate(const int ind, const double r, double &dphi)
+{
+  // find the bucket and position in bucket corresponding to r
+  double pp = r * rdrar;
+  int bucket = std::min((int)pp, nrar - 2);
+  double x = std::min(pp - bucket, 1.0);
+
+  // spline coeffs
+  auto &phi = phi_spline[ind][bucket];
+  auto &phip = phip_spline[ind][bucket];
+
+  // evaluate
+  dphi = (phip[2] * x + phip[1]) * x + phip[0];
+  return ((phi[3] * x + phi[2]) * x + phi[1]) * x + phi[0];
+}
+
+/* ----------------------------------------------------------------------
+   Compute force, stress, and energy contribution of the density gradient
+------------------------------------------------------------------------- */
+
+void MEAM::eval_force(int i, int eflag_global, int eflag_atom, int vflag_global, int vflag_atom,
                       double *eng_vdwl, double *eatom, int /*ntype*/, int *type, int *fmap,
                       double **scale, double **x, int numneigh, int *firstneigh, int numneigh_full,
                       int *firstneigh_full, int fnoffset, double **f, double **vatom,
                       double *virial)
 {
-  int j, jn, k, kn, kk, m, n, p, q;
-  int nv2, nv3, elti, eltj, eltk, ind;
+  int j, jn, k, kn, m, n, p, q;
+  int nv2, nv3, elti, eltj, eltk;
   int eflag_either = eflag_atom || eflag_global;
   int vflag_either = vflag_atom || vflag_global;
   double xitmp, yitmp, zitmp, delij[3], rij2, rij, rij3;
   double v[6], fi[3], fj[3];
   double third, sixth;
-  double pp, dUdrij, dUdsij, dUdrijm[3], force, forcem;
+  double dUdrij, dUdsij, dUdrijm[3], force, forcem;
   double recip, phi, phip;
   double sij;
   double a1, a1i, a1j, a2, a2i, a2j;
@@ -102,27 +285,17 @@ void MEAM::meam_force(int i, int eflag_global, int eflag_atom, int vflag_global,
         rij = sqrt(rij2);
         recip = 1.0 / rij;
         //     Compute phi and phip
-        ind = eltind[elti][eltj];
-        pp = rij * rdrar;
-        kk = (int)pp;
-        kk = std::min(kk, nrar - 2);
-        pp = pp - kk;
-        pp = std::min(pp, 1.0);
-        phi = ((phirar3[ind][kk] * pp + phirar2[ind][kk]) * pp + phirar1[ind][kk]) * pp + phirar[ind][kk];
-        phip = (phirar6[ind][kk] * pp + phirar5[ind][kk]) * pp + phirar4[ind][kk];
+        phi = phi_interpolate(eltind[elti][eltj], rij, phip);
 
         if (eflag_either != 0) {
-          double phi_sc = phi * scaleij;
+          double phi_sc = phi * scaleij * sij;
           if (eflag_global != 0)
-            *eng_vdwl = *eng_vdwl + phi_sc * sij;
+            *eng_vdwl = *eng_vdwl + phi_sc;
           if (eflag_atom != 0) {
-            eatom[i] = eatom[i] + 0.5 * phi_sc * sij;
-            eatom[j] = eatom[j] + 0.5 * phi_sc * sij;
+            eatom[i] = eatom[i] + 0.5 * phi_sc;
+            eatom[j] = eatom[j] + 0.5 * phi_sc;
           }
         }
-
-        //     write(1,*) "force_meamf: phi: ",phi
-        //     write(1,*) "force_meamf: phip: ",phip
 
         //     Compute pair densities and derivatives
 
@@ -397,10 +570,9 @@ void MEAM::meam_force(int i, int eflag_global, int eflag_atom, int vflag_global,
         }
 
         // compute derivatives of weighting functions t wrt rij
-        // weighting functions t set to unity for MS-MEAM
 
         if (msmeamflag) {
-
+          // weighting functions t set to unity for MS-MEAM
           t1i = 1.0;
           t2i = 1.0;
           t3i = 1.0;
@@ -413,9 +585,7 @@ void MEAM::meam_force(int i, int eflag_global, int eflag_atom, int vflag_global,
           dt2dr2 = 0.0;
           dt3dr1 = 0.0;
           dt3dr2 = 0.0;
-
         } else {
-
           t1i = t_ave[i][0];
           t2i = t_ave[i][1];
           t3i = t_ave[i][2];
@@ -424,7 +594,6 @@ void MEAM::meam_force(int i, int eflag_global, int eflag_atom, int vflag_global,
           t3j = t_ave[j][2];
 
           if (ialloy == 1) {
-
             a1i = fdiv_zero(drhoa0j * sij, tsq_ave[i][0]);
             a1j = fdiv_zero(drhoa0i * sij, tsq_ave[j][0]);
             a2i = fdiv_zero(drhoa0j * sij, tsq_ave[i][1]);
@@ -438,18 +607,14 @@ void MEAM::meam_force(int i, int eflag_global, int eflag_atom, int vflag_global,
             dt2dr2 = a2j * (t2mi - t2j * MathSpecial::square(t2mi));
             dt3dr1 = a3i * (t3mj - t3i * MathSpecial::square(t3mj));
             dt3dr2 = a3j * (t3mi - t3j * MathSpecial::square(t3mi));
-
           } else if (ialloy == 2) {
-
             dt1dr1 = 0.0;
             dt1dr2 = 0.0;
             dt2dr1 = 0.0;
             dt2dr2 = 0.0;
             dt3dr1 = 0.0;
             dt3dr2 = 0.0;
-
           } else {
-
             ai = 0.0;
             if (!iszero(rho0[i]))
               ai = drhoa0j * sij / rho0[i];
@@ -464,7 +629,6 @@ void MEAM::meam_force(int i, int eflag_global, int eflag_atom, int vflag_global,
             dt3dr1 = ai * (t3mj - t3i);
             dt3dr2 = aj * (t3mi - t3j);
           }
-
         }
 
         //     Compute derivatives of total density wrt rij, sij and rij(3)

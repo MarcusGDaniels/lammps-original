@@ -14,13 +14,20 @@
 #ifndef LMP_MEAM_H
 #define LMP_MEAM_H
 
+#include "exceptions.h"
+
 #include <cmath>
 #include <string>
 
 constexpr int MAXELT = 8;
+// This should really be true for sanity reasons (see MEAM::alloyparams),
+// but breaks too many potential files - including our tests. So disable for now.
+constexpr bool STRICT_IJ_ORDER = false;
 
 namespace LAMMPS_NS {
 class Memory;
+
+namespace MEAM_NS {
 
 typedef enum { FCC, BCC, HCP, DIM, DIA, DIA3, B1, C11, L12, B2, CH4, LIN, ZIG, TRI, SC } lattice_t;
 
@@ -55,8 +62,6 @@ class MEAM {
   // lattce_meam(i,j) = lattce configuration for elt i or alloy (i,j)
   // neltypes = maximum number of element type defined
   // eltind = index number of pair (similar to Voigt notation; ij = ji)
-  // phir = pair potential function array
-  // phirar[1-6] = spline coeffs
   // attrac_meam = attraction parameter in Rose energy
   // repuls_meam = repulsion parameter in Rose energy
   // nn2_meam = 1 if second nearest neighbors are to be computed, else 0
@@ -77,7 +82,7 @@ class MEAM {
 
   // MS-MEAM parameters
 
-  // msmeamflag = flag to activate MS-MEAM
+  // msmeamflag = flag to activate MS-MEAM (public; above)
   // betam[1-3]_meam = MS-MEAM electron density constants
   // tm[1-3]_meam = MS-MEAM coefficients on densities in Gamma computation
 
@@ -103,9 +108,12 @@ class MEAM {
   int eltind[MAXELT][MAXELT];
   int neltypes;
 
+  // phi as computed from the potential, dimension: [(neltypes * (neltypes + 1)) / 2][nr],
   double **phir;
 
-  double **phirar, **phirar1, **phirar2, **phirar3, **phirar4, **phirar5, **phirar6;
+  // phi interpolation spline, dimension: [(neltypes * (neltypes + 1)) / 2][nrar][4]
+  // phi' interpolation spline, dimension: [(neltypes * (neltypes + 1)) / 2][nrar][3]
+  double ***phi_spline, ***phip_spline;
 
   double attrac_meam[MAXELT][MAXELT], repuls_meam[MAXELT][MAXELT];
 
@@ -126,7 +134,6 @@ class MEAM {
 
   double t1m_meam[MAXELT], t2m_meam[MAXELT], t3m_meam[MAXELT];
   double beta1m_meam[MAXELT], beta2m_meam[MAXELT], beta3m_meam[MAXELT];
-  //int msmeamflag; // made public for pair style settings
 
  public:
   int nmax;
@@ -147,102 +154,16 @@ class MEAM {
 
  protected:
   // meam_funcs.cpp
-
-  //-----------------------------------------------------------------------------
-  // Cutoff function
-  //
-  static double fcut(const double xi)
-  {
-    double a;
-    if (xi >= 1.0)
-      return 1.0;
-    else if (xi <= 0.0)
-      return 0.0;
-    else {
-      // ( 1.d0 - (1.d0 - xi)**4 )**2, but with better codegen
-      a = 1.0 - xi;
-      a *= a;
-      a *= a;
-      a = 1.0 - a;
-      return a * a;
-    }
-  }
-
-  //-----------------------------------------------------------------------------
-  // Cutoff function and derivative
-  //
-  static double dfcut(const double xi, double &dfc)
-  {
-    double a, a3, a4, a1m4;
-    if (xi >= 1.0) {
-      dfc = 0.0;
-      return 1.0;
-    } else if (xi <= 0.0) {
-      dfc = 0.0;
-      return 0.0;
-    } else {
-      a = 1.0 - xi;
-      a3 = a * a * a;
-      a4 = a * a3;
-      a1m4 = 1.0 - a4;
-
-      dfc = 8 * a1m4 * a3;
-      return a1m4 * a1m4;
-    }
-  }
-
-  //-----------------------------------------------------------------------------
-  // Derivative of Cikj w.r.t. rij
-  //     Inputs: rij,rij2,rik2,rjk2
-  //
-  static double dCfunc(const double rij2, const double rik2, const double rjk2)
-  {
-    double rij4, a, asq, b, denom;
-
-    rij4 = rij2 * rij2;
-    a = rik2 - rjk2;
-    b = rik2 + rjk2;
-    asq = a * a;
-    denom = rij4 - asq;
-    denom = denom * denom;
-    return -4 * (-2 * rij2 * asq + rij4 * b + asq * b) / denom;
-  }
-
-  //-----------------------------------------------------------------------------
-  // Derivative of Cikj w.r.t. rik and rjk
-  //     Inputs: rij,rij2,rik2,rjk2
-  //
-  static void dCfunc2(const double rij2, const double rik2, const double rjk2, double &dCikj1,
-                      double &dCikj2)
-  {
-    double rij4, rik4, rjk4, a, denom;
-
-    rij4 = rij2 * rij2;
-    rik4 = rik2 * rik2;
-    rjk4 = rjk2 * rjk2;
-    a = rik2 - rjk2;
-    denom = rij4 - a * a;
-    denom = denom * denom;
-    dCikj1 = 4 * rij2 * (rij4 + rik4 + 2 * rik2 * rjk2 - 3 * rjk4 - 2 * rij2 * a) / denom;
-    dCikj2 = 4 * rij2 * (rij4 - 3 * rik4 + 2 * rik2 * rjk2 + rjk4 + 2 * rij2 * a) / denom;
-  }
-
   double G_gam(const double gamma, const int ibar, int &errorflag) const;
   double dG_gam(const double gamma, const int ibar, double &dG) const;
-  static double zbl(const double r, const int z1, const int z2);
+  bool rhobar12(const double r, const int a, const int b, double &rhobar1, double &rhobar2) const;
   double embedding(const double A, const double Ec, const double rhobar, double &dF) const;
-  static double erose(const double r, const double re, const double alpha, const double Ec,
-                      const double repuls, const double attrac, const int form);
-
-  static void get_shpfcn(const lattice_t latt, const double sthe, const double cthe,
-                         double (&s)[3]);
-
-  static int get_Zij2(const lattice_t latt, const double cmin, const double cmax, const double sthe,
-                      double &a, double &S);
-  static int get_Zij2_b2nn(const lattice_t latt, const double cmin, const double cmax, double &S);
+  double invert_eam(const double r, const int a, const int b, const double Eu, const double F1, const double F2) const;
+  double phi_meam(double, int, int) const;
+  double phi_2nn_series(const double scrn, const int Z1, const int Z2, const int a, const int b,
+                        const double r, const double arat) const;
 
  protected:
-  void meam_checkindex(int, int, int, int *, int *);
   void getscreen(int i, double *scrfcn, double *dscrfcn, double *fcpair, double **x, int numneigh,
                  int *firstneigh, int numneigh_full, int *firstneigh_full, int ntype, int *type,
                  int *fmap);
@@ -251,94 +172,219 @@ class MEAM {
 
   void alloyparams();
   void compute_pair_meam();
-  double phi_meam(double, int, int);
-  double phi_meam_series(const double scrn, const int Z1, const int Z2, const int a, const int b,
-                         const double r, const double arat);
   void compute_reference_density();
   void get_tavref(double *, double *, double *, double *, double *, double *, double, double,
-                  double, double, double, double, double, int, int, lattice_t);
-  void get_sijk(double, int, int, int, double *);
+                  double, double, double, double, double, double, double, int, int, lattice_t) const;
+  double get_sijk(double, int, int, int) const;
   void get_densref(double, int, int, double *, double *, double *, double *, double *, double *,
-                   double *, double *, double *, double *, double *, double *, double *, double *); // last 6 args for msmeam
+                   double *, double *, double *, double *, double *, double *, double *, double *) const; // last 6 args for msmeam
   void interpolate_meam(int);
+  double phi_interpolate(const int ind, const double r, double &dphi);
 
  public:
-  // clang-format off
-  //-----------------------------------------------------------------------------
-  // convert lattice spec to lattice_t
-  // only use single-element lattices if single=true
-  // return false on failure
-  // return true and set lat on success
-  static bool str_to_lat(const std::string & str, bool single, lattice_t& lat)
-  {
-    if (str == "fcc") lat = FCC;
-    else if (str == "bcc") lat = BCC;
-    else if (str == "hcp") lat = HCP;
-    else if (str == "dim") lat = DIM;
-    else if (str == "dia") lat = DIA;
-    else if (str == "dia3") lat = DIA3;
-    else if (str == "lin") lat = LIN;
-    else if (str == "zig") lat = ZIG;
-    else if (str == "tri") lat = TRI;
-    else if (str == "sc") lat = SC;
-    else {
-      if (single)
-        return false;
+  void setup_library(int nelt, lattice_t *lat, int *ielement, double *atwt, double *alpha,
+                     double *b0, double *b1, double *b2, double *b3, double *alat, double *esub,
+                     double *asub, double *t0, double *t1, double *t2, double *t3,
+                     double *rozero, int *ibar);
+  void setup_library_ms(int nelt, double *b1m, double *b2m, double *b3m,
+                        double *t1m, double *t2m, double *t3m);
+  void setup_param(int which, double value, int nindex, int *index /*index(3)*/,
+                   int *errorflag);
+  void setup_finish(double *cutmax);
 
-      if (str == "b1") lat = B1;
-      else if (str == "c11") lat = C11;
-      else if (str == "l12") lat = L12;
-      else if (str == "b2") lat = B2;
-      else if (str == "ch4") lat = CH4;
-      else if (str == "lin") lat =LIN;
-      else if (str == "zig") lat = ZIG;
-      else if (str == "tri") lat = TRI;
-      else return false;
-    }
-    return true;
-  }
-  // clang-format on
-  static int get_Zij(const lattice_t latt);
-  // last 6 args are optional msmeam parameters
-  void meam_setup_global(int nelt, lattice_t *lat, int *ielement, double *atwt, double *alpha,
-                         double *b0, double *b1, double *b2, double *b3, double *alat, double *esub,
-                         double *asub, double *t0, double *t1, double *t2, double *t3,
-                         double *rozero, int *ibar, double *b1m, double *b2m, double *b3m,
-                         double *t1m, double *t2m, double *t3m);
-  void meam_setup_param(int which, double value, int nindex, int *index /*index(3)*/,
-                        int *errorflag);
-  virtual void meam_setup_done(double *cutmax);
-  virtual void meam_dens_setup(int atom_nmax, int nall, int n_neigh);
-  void meam_dens_init(int i, int ntype, int *type, int *fmap, double **x, int numneigh,
-                      int *firstneigh, int numneigh_full, int *firstneigh_full, int fnoffset);
-  void meam_dens_final(int nlocal, int eflag_either, int eflag_global, int eflag_atom,
-                       double *eng_vdwl, double *eatom, int ntype, int *type, int *fmap,
-                       double **scale, int &errorflag);
-  void meam_force(int i, int eflag_global, int eflag_atom, int vflag_global, int vflag_atom,
+  void density_precompute();
+  void density_setup(int atom_nmax, int nall, int n_neigh);
+  void density_local(int i, int ntype, int *type, int *fmap, double **x, int numneigh,
+                     int *firstneigh, int numneigh_full, int *firstneigh_full, int fnoffset);
+
+  void eval_energy(int nlocal, int eflag_either, int eflag_global, int eflag_atom,
+                   double *eng_vdwl, double *eatom, int ntype, int *type, int *fmap,
+                   double **scale, int &errorflag);
+  void eval_force(int i, int eflag_global, int eflag_atom, int vflag_global, int vflag_atom,
                   double *eng_vdwl, double *eatom, int ntype, int *type, int *fmap, double **scale,
                   double **x, int numneigh, int *firstneigh, int numneigh_full,
                   int *firstneigh_full, int fnoffset, double **f, double **vatom, double *virial);
 };
 
+class MEAMException : public LAMMPSException {
+ public:
+  MEAMException(const std::string &msg) :
+      LAMMPSException(msg)
+  {
+  }
+};
+
+//-----------------------------------------------------------------------------
+// Reference lattice definition
+// Any value not set will be 0/false/nullptr, make sure this is a sensible default
+
+typedef struct {
+  // Name of the lattice in potential files
+  const char * name;
+  // lattice is valid for single element references
+  bool single;
+  // factor from alat to re
+  double re;
+  // Number of nearest neighbors (=coordination number)
+  int Zij;
+  // Number of second-nearest neighbors
+  int Zij2;
+  // number of atoms that screen the 2NN bond
+  int Nscr2;
+  // distance ratio R1/R2 (a2nn in dynamo)
+  double ratio_2nn;
+  // ratio_2nn depends on sin(theta)
+  bool ratio_2nn_angular;
+  // include contribution of a-a, b-b 2NN neighbors in a-b calculation
+  bool phi_2nn_recursive;
+  // special: in 2nn pair potential calculation, apply L12 uneven types
+  bool type_2nn_l12;
+  // shape function getter, assume s is initialized to 0.0
+  void (*shpfcn)(const double sthe, const double cthe, double (&s)[3]);
+  // i-j cohesive energy from formation energy, use averaging if not specified
+  double (*ecoh)(const double Eii, const lattice_t ilat, const double Ejj, const double delta);
+  // special: reference structure includes third nearest neighbors
+  bool nn3;
+} reference_lattice_t;
+
+constexpr int MAXLAT = 15;
+extern const reference_lattice_t lattice_defs[MAXLAT];
+
+//-----------------------------------------------------------------------------
 // Functions we need for compat
 
-static inline bool iszero(const double f)
+static
+inline bool iszero(const double f)
 {
   return fabs(f) < 1e-20;
 }
 
-static inline bool isone(const double f)
+static
+inline bool isone(const double f)
 {
   return fabs(f - 1.0) < 1e-20;
 }
 
+//-----------------------------------------------------------------------------
 // Helper functions
 
-static inline double fdiv_zero(const double n, const double d)
+static
+inline double fdiv_zero(const double n, const double d)
 {
   if (iszero(d)) return 0.0;
   return n / d;
 }
 
+
+//-----------------------------------------------------------------------------
+// Pure Functions where inlining is known to give performance benefit: give the
+// compiler visibility at call site, but leave final inline decision to optimizer
+
+// Cutoff function
+//
+static
+double fcut(const double xi)
+{
+  double a;
+  if (xi >= 1.0)
+    return 1.0;
+  else if (xi <= 0.0)
+    return 0.0;
+  else {
+    // ( 1.d0 - (1.d0 - xi)**4 )**2, but with better codegen
+    a = 1.0 - xi;
+    a *= a;
+    a *= a;
+    a = 1.0 - a;
+    return a * a;
+  }
+}
+
+// Cutoff function and derivative
+//
+static
+double dfcut(const double xi, double &dfc)
+{
+  double a, a3, a4, a1m4;
+  if (xi >= 1.0) {
+    dfc = 0.0;
+    return 1.0;
+  } else if (xi <= 0.0) {
+    dfc = 0.0;
+    return 0.0;
+  } else {
+    a = 1.0 - xi;
+    a3 = a * a * a;
+    a4 = a * a3;
+    a1m4 = 1.0 - a4;
+
+    dfc = 8 * a1m4 * a3;
+    return a1m4 * a1m4;
+  }
+}
+
+// Screening ellipse, excluding multiple screening
+//
+static
+double Csijk(const double C, const double Cmin, const double Cmax)
+{
+  double x;
+  x = (C - Cmin) / (Cmax - Cmin);
+  return fcut(x);
+}
+
+// Derivative of Cikj w.r.t. rij
+//     Inputs: rij,rij2,rik2,rjk2
+//
+static
+double dCfunc(const double rij2, const double rik2, const double rjk2)
+{
+  double rij4, a, asq, b, denom;
+
+  rij4 = rij2 * rij2;
+  a = rik2 - rjk2;
+  b = rik2 + rjk2;
+  asq = a * a;
+  denom = rij4 - asq;
+  denom = denom * denom;
+  return -4 * (-2 * rij2 * asq + rij4 * b + asq * b) / denom;
+}
+
+// Derivative of Cikj w.r.t. rik and rjk
+//     Inputs: rij,rij2,rik2,rjk2
+//
+static
+void dCfunc2(const double rij2, const double rik2, const double rjk2, double &dCikj1,
+             double &dCikj2)
+{
+  double rij4, rik4, rjk4, a, denom;
+
+  rij4 = rij2 * rij2;
+  rik4 = rik2 * rik2;
+  rjk4 = rjk2 * rjk2;
+  a = rik2 - rjk2;
+  denom = rij4 - a * a;
+  denom = denom * denom;
+  dCikj1 = 4 * rij2 * (rij4 + rik4 + 2 * rik2 * rjk2 - 3 * rjk4 - 2 * rij2 * a) / denom;
+  dCikj2 = 4 * rij2 * (rij4 - 3 * rik4 + 2 * rik2 * rjk2 + rjk4 + 2 * rij2 * a) / denom;
+}
+
+//-----------------------------------------------------------------------------
+// Pure Functions where no benefit from inlining is expected
+extern bool str_to_lat(const std::string & str, bool single, lattice_t& lat);
+extern double zbl(const double r, const int z1, const int z2);
+extern double erose(const double r, const double re, const double alpha, const double Ec,
+                    const double repuls, const double attrac, const int form);
+
+extern void get_shpfcn(const lattice_t latt, const double sthe, const double cthe,
+                       double (&s)[3]);
+
+extern int get_Zij(const lattice_t latt);
+extern int get_Zij2(const lattice_t latt, const double cmin, const double cmax, const double sthe,
+                    double &arat, double &S);
+extern int get_Zij2_b2nn(const lattice_t latt, const double cmin, const double cmax, double &S);
+
+
+}    // namespace MEAM_NS
 }    // namespace LAMMPS_NS
 #endif

@@ -20,12 +20,14 @@
 #include "memory.h"
 
 using namespace LAMMPS_NS;
+using namespace MEAM_NS;
 
 /* ---------------------------------------------------------------------- */
 
 MEAM::MEAM(Memory *mem) : memory(mem)
 {
-  phir = phirar = phirar1 = phirar2 = phirar3 = phirar4 = phirar5 = phirar6 = nullptr;
+  phir = nullptr;
+  phi_spline = phip_spline = nullptr;
 
   nmax = 0;
   rho = rho0 = rho1 = rho2 = rho3 = frhop = nullptr;
@@ -54,20 +56,53 @@ MEAM::MEAM(Memory *mem) : memory(mem)
       nn2_meam[i][j] = zbl_meam[i][j] = eltind[i][j] = 0;
     }
   }
+
+  // indices and weights for Voight notation
+  int nv2 = 0;
+  int nv3 = 0;
+  for (int m = 0; m < 3; m++) {
+    for (int n = m; n < 3; n++) {
+      vind2D[m][n] = nv2;
+      vind2D[n][m] = nv2;
+      nv2 = nv2 + 1;
+      for (int p = n; p < 3; p++) {
+        vind3D[m][n][p] = nv3;
+        vind3D[m][p][n] = nv3;
+        vind3D[n][m][p] = nv3;
+        vind3D[n][p][m] = nv3;
+        vind3D[p][m][n] = nv3;
+        vind3D[p][n][m] = nv3;
+        nv3 = nv3 + 1;
+      }
+    }
+  }
+
+  v2D[0] = 1;
+  v2D[1] = 2;
+  v2D[2] = 2;
+  v2D[3] = 1;
+  v2D[4] = 2;
+  v2D[5] = 1;
+
+  v3D[0] = 1;
+  v3D[1] = 3;
+  v3D[2] = 3;
+  v3D[3] = 3;
+  v3D[4] = 6;
+  v3D[5] = 3;
+  v3D[6] = 1;
+  v3D[7] = 3;
+  v3D[8] = 3;
+  v3D[9] = 1;
 }
 
 MEAM::~MEAM()
 {
   if (copymode) return;
 
-  memory->destroy(phirar6);
-  memory->destroy(phirar5);
-  memory->destroy(phirar4);
-  memory->destroy(phirar3);
-  memory->destroy(phirar2);
-  memory->destroy(phirar1);
-  memory->destroy(phirar);
   memory->destroy(phir);
+  memory->destroy(phi_spline);
+  memory->destroy(phip_spline);
 
   memory->destroy(rho);
   memory->destroy(rho0);

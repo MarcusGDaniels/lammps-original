@@ -33,6 +33,7 @@
 #include <memory>
 
 using namespace LAMMPS_NS;
+using namespace MEAM_NS;
 
 static constexpr int MAXLINE = 1024;
 
@@ -116,7 +117,7 @@ void PairMEAM::compute(int eflag, int vflag)
   n = 0;
   for (ii = 0; ii < inum_half; ii++) n += numneigh_half[ilist_half[ii]];
 
-  meam_inst->meam_dens_setup(atom->nmax, nall, n);
+  meam_inst->density_setup(atom->nmax, nall, n);
 
   double **x = atom->x;
   double **f = atom->f;
@@ -130,27 +131,27 @@ void PairMEAM::compute(int eflag, int vflag)
   errorflag = 0;
   for (ii = 0; ii < inum_half; ii++) {
     i = ilist_half[ii];
-    meam_inst->meam_dens_init(i, ntype, type, map, x, numneigh_half[i], firstneigh_half[i],
-                              numneigh_full[i], firstneigh_full[i], offset);
+    meam_inst->density_local(i, ntype, type, map, x, numneigh_half[i], firstneigh_half[i],
+                             numneigh_full[i], firstneigh_full[i], offset);
     offset += numneigh_half[i];
   }
   comm->reverse_comm(this);
-  meam_inst->meam_dens_final(nlocal, eflag_either, eflag_global, eflag_atom, &eng_vdwl, eatom,
-                             ntype, type, map, scale, errorflag);
+  meam_inst->eval_energy(nlocal, eflag_either, eflag_global, eflag_atom, &eng_vdwl, eatom,
+                         ntype, type, map, scale, errorflag);
   if (errorflag) error->one(FLERR, Error::NOLASTLINE, "MEAM library error {}", errorflag);
 
   comm->forward_comm(this);
 
   offset = 0;
 
-  // vptr is first value in vatom if it will be used by meam_force()
+  // vptr is first value in vatom if it will be used by eval_force()
   // else vatom may not exist, so pass dummy ptr
 
   double **vptr = nullptr;
   if (vflag_atom) vptr = vatom;
   for (ii = 0; ii < inum_half; ii++) {
     i = ilist_half[ii];
-    meam_inst->meam_force(i, eflag_global, eflag_atom, vflag_global, vflag_atom, &eng_vdwl, eatom,
+    meam_inst->eval_force(i, eflag_global, eflag_atom, vflag_global, vflag_atom, &eng_vdwl, eatom,
                           ntype, type, map, scale, x, numneigh_half[i], firstneigh_half[i],
                           numneigh_full[i], firstneigh_full[i], offset, f, vptr, virial);
     offset += numneigh_half[i];
@@ -182,12 +183,12 @@ void PairMEAM::settings(int narg, char ** /*arg*/)
 
   // set comm size needed by this Pair
 
+  comm_forward = 38;
+  comm_reverse = 30;
+
   if (msmeamflag) {
-    comm_forward = 38 + 23;    // plus 23 for msmeam
-    comm_reverse = 30 + 23;    // plus 23 for msmeam
-  } else {
-    comm_forward = 38;
-    comm_reverse = 30;
+    comm_forward += 23;
+    comm_reverse += 23;
   }
 }
 
@@ -208,10 +209,7 @@ void PairMEAM::coeff(int narg, char **arg)
 
   std::string lib_file = utils::get_potential_file_path(arg[2]);
   if (lib_file.empty()) {
-    if (msmeamflag)
-      error->all(FLERR, 2, "Cannot open MS-MEAM library file {}", lib_file);
-    else
-      error->all(FLERR, 2, "Cannot open MEAM library file {}", lib_file);
+    error->all(FLERR, 2, "Cannot open pair style {} library file {}", myname, lib_file);
   }
 
   // find meam parameter file in arguments:
@@ -233,10 +231,7 @@ void PairMEAM::coeff(int narg, char **arg)
     }
   }
   if (paridx < 0) {
-    if (msmeamflag)
-      error->all(FLERR, Error::NOPOINTER, "No MS-MEAM parameter file in pair coefficients");
-    else
-      error->all(FLERR, Error::NOPOINTER, "No MEAM parameter file in pair coefficients");
+    error->all(FLERR, Error::NOPOINTER, "No parameter file in pair style {} coefficients", myname);
   }
   if ((narg - paridx - 1) != atom->ntypes)
     error->all(FLERR, Error::NOPOINTER, "Expected {} but found {} args for pair style {} "
@@ -269,10 +264,10 @@ void PairMEAM::coeff(int narg, char **arg)
 
   // read MEAM library and parameter files
   // pass all parameters to MEAM package
-  // tell MEAM package that setup is done
 
   read_files(lib_file, par_file, 3 + nlibelements);
-  meam_inst->meam_setup_done(&cutmax);
+  meam_inst->setup_finish(&cutmax);
+  meam_inst->density_precompute();
 
   // read args that map atom types to MEAM elements
   // map[i] = which element the Ith atom type is, -1 if not mapped
@@ -433,7 +428,7 @@ void PairMEAM::read_global_meam_file(const std::string &globalfile)
         // map lat string to an integer
         std::string lattice_type = values.next_string();
 
-        if (!MEAM::str_to_lat(lattice_type, true, lat[index]))
+        if (!str_to_lat(lattice_type, true, lat[index]))
           error->one(FLERR, 4, "Unrecognized lattice type in MEAM library file: {}", lattice_type);
 
         // store parameters
@@ -470,7 +465,7 @@ void PairMEAM::read_global_meam_file(const std::string &globalfile)
           error->one(FLERR, 4, "Unsupported parameter in MEAM library file: t0 != 1");
 
         // z given is ignored: if this is mismatched, we definitely won't do what the user said -> fatal error
-        if (z[index] != MEAM::get_Zij(lat[index]))
+        if (z[index] != get_Zij(lat[index]))
           error->one(FLERR, 4, "Mismatched parameter in MEAM library file: z != lat");
 
         nset++;
@@ -521,18 +516,12 @@ void PairMEAM::read_global_meam_file(const std::string &globalfile)
 
   // pass element parameters to MEAM package
 
+  meam_inst->setup_library(nlibelements, lat.data(), ielement.data(), atwt.data(),
+                           alpha.data(), b0.data(), b1.data(), b2.data(), b3.data(),
+                           alat.data(), esub.data(), asub.data(), t0.data(), t1.data(),
+                           t2.data(), t3.data(), rozero.data(), ibar.data());
   if (msmeamflag) {
-    meam_inst->meam_setup_global(nlibelements, lat.data(), ielement.data(), atwt.data(),
-                                 alpha.data(), b0.data(), b1.data(), b2.data(), b3.data(),
-                                 alat.data(), esub.data(), asub.data(), t0.data(), t1.data(),
-                                 t2.data(), t3.data(), rozero.data(), ibar.data(), b1m.data(),
-                                 b2m.data(), b3m.data(), t1m.data(), t2m.data(), t3m.data());
-  } else {
-    meam_inst->meam_setup_global(nlibelements, lat.data(), ielement.data(), atwt.data(),
-                                 alpha.data(), b0.data(), b1.data(), b2.data(), b3.data(),
-                                 alat.data(), esub.data(), asub.data(), t0.data(), t1.data(),
-                                 t2.data(), t3.data(), rozero.data(), ibar.data(), nullptr, nullptr,
-                                 nullptr, nullptr, nullptr, nullptr);
+    meam_inst->setup_library_ms(nlibelements, b1m.data(), b2m.data(), b3m.data(), t1m.data(), t2m.data(), t3m.data());
   }
 
   // set element masses
@@ -602,7 +591,7 @@ void PairMEAM::read_user_meam_file(const std::string &userfile, int uidx)
     if (which == 4) {
       std::string lattice_type = values.next_string();
       lattice_t latt;
-      if (!MEAM::str_to_lat(lattice_type, false, latt))
+      if (!str_to_lat(lattice_type, false, latt))
         error->all(FLERR, uidx, "Unrecognized lattice type {} in MEAM parameter file {}:{}",
                    lattice_type, userfile, lineno);
       value = latt;
@@ -618,11 +607,14 @@ void PairMEAM::read_user_meam_file(const std::string &userfile, int uidx)
     // pass single setting to MEAM package
 
     int errorflag = 0;
-    meam_inst->meam_setup_param(which, value, nindex, index, &errorflag);
+    meam_inst->setup_param(which, value, nindex, index, &errorflag);
     if (errorflag) {
-      const char *descr[] = {"has an unknown error", "is out of range (please report a bug)",
-                             "expected more indices", "has out of range element index"};
-      if ((errorflag < 0) || (errorflag > 3)) errorflag = 0;
+      const char *descr[] = { "has an unknown error",
+              "is out of range (please report a bug)",
+              "expected more indices",
+              "has out of range element index",
+              "has invalid order (I>J)"};
+      if ((errorflag < 0) || (errorflag > 4)) errorflag = 0;
       error->all(FLERR, uidx, "Error in MEAM parameter file {}:{}: keyword {} {}", userfile, lineno,
                  keyword, descr[errorflag]);
     }

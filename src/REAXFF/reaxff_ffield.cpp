@@ -56,7 +56,6 @@ namespace ReaxFF {
   void Read_Force_Field(const char *filename, reax_interaction *reax,
                         control_params *control, MPI_Comm world)
   {
-    char ****tor_flag;
     auto error = control->error_ptr;
     auto lmp = control->lmp_ptr;
     auto memory = control->lmp_ptr->memory;
@@ -131,12 +130,14 @@ namespace ReaxFF {
         auto &thbp = reax->thbp;
         auto &hbp = reax->hbp;
         auto &fbp = reax->fbp;
+        auto &tor_flag = reax->tor_flag;
 
         memory->destroy(sbp);
         memory->destroy(tbp);
         memory->destroy(thbp);
         memory->destroy(hbp);
         memory->destroy(fbp);
+        memory->destroy(tor_flag);
         memory->create(sbp,n,"reaxff:sbp");
         memory->create(tbp,n,n,"reaxff:tbp");
         memory->create(thbp,n,n,n,"reaxff:thbp");
@@ -148,7 +149,7 @@ namespace ReaxFF {
         memset(&(thbp[0][0][0]),0,sizeof(three_body_header)*n*n*n);
         memset(&(hbp[0][0][0]),0,sizeof(hbond_parameters)*n*n*n);
         memset(&(fbp[0][0][0][0]),0,sizeof(four_body_header)*n*n*n*n);
-        memset(&tor_flag[0][0][0][0],0,sizeof(char)*n*n*n*n);
+        memset(&(tor_flag[0][0][0][0]),0,sizeof(char)*n*n*n*n);
 
         // atomic parameters
         // four lines per atom type, or 5 if lgvdw != 0
@@ -181,7 +182,7 @@ namespace ReaxFF {
           sbp[i].r_vdw      = values.next_double();
           sbp[i].epsilon    = values.next_double();
           sbp[i].gamma      = values.next_double();
-          sbp[i].r_pi       = values.next_double();
+          sbp[i].r_p        = values.next_double();
           sbp[i].valency_e  = values.next_double();
           sbp[i].nlp_opt = 0.5 * (sbp[i].valency_e-sbp[i].valency);
 
@@ -191,14 +192,14 @@ namespace ReaxFF {
           ++lineno;
           CHECK_COLUMNS(8);
 
-          sbp[i].alpha      = values.next_double();
-          sbp[i].gamma_w    = values.next_double();
-          sbp[i].valency_boc= values.next_double();
-          sbp[i].p_ovun5    = values.next_double();
-          values.skip();
-          sbp[i].chi        = values.next_double();
-          sbp[i].eta        = 2.0*values.next_double();
-          sbp[i].p_hbond = (int) values.next_double();
+          sbp[i].alpha       = values.next_double();
+          sbp[i].gamma_w     = values.next_double();
+          sbp[i].valency_boc = values.next_double();
+          sbp[i].p_ovun5     = values.next_double();
+          sbp[i].p_xel2      = values.next_double();  // for ereaxff
+          sbp[i].chi         = values.next_double();
+          sbp[i].eta         = 2.0*values.next_double();
+          sbp[i].p_hbond     = (int) values.next_double();
 
           // line three
 
@@ -206,13 +207,14 @@ namespace ReaxFF {
           ++lineno;
           CHECK_COLUMNS(8);
 
-          sbp[i].r_pi_pi    = values.next_double();
+          sbp[i].r_pp       = values.next_double();
           sbp[i].p_lp2      = values.next_double();
-          values.skip();
+          sbp[i].gauss_exp  = values.next_double();  // for QTPIE
           sbp[i].b_o_131    = values.next_double();
           sbp[i].b_o_132    = values.next_double();
           sbp[i].b_o_133    = values.next_double();
-          sbp[i].bcut_acks2  = values.next_double();
+          sbp[i].bcut_acks2 = values.next_double();
+          sbp[i].ealpha     = values.next_double();  // for ereaxff
 
           // line four
 
@@ -220,14 +222,14 @@ namespace ReaxFF {
           ++lineno;
           CHECK_COLUMNS(8);
 
-          sbp[i].p_ovun2    = values.next_double();
-          sbp[i].p_val3     = values.next_double();
-          values.skip();
-          sbp[i].valency_val= values.next_double();
-          sbp[i].p_val5     = values.next_double();
-          sbp[i].rcore2     = values.next_double();
-          sbp[i].ecore2     = values.next_double();
-          sbp[i].acore2     = values.next_double();
+          sbp[i].p_ovun2     = values.next_double();
+          sbp[i].p_val3      = values.next_double();
+          sbp[i].ebeta       = values.next_double();  // for ereaxff
+          sbp[i].valency_val = values.next_double();
+          sbp[i].p_val5      = values.next_double();
+          sbp[i].rcore2      = values.next_double();
+          sbp[i].ecore2      = values.next_double();
+          sbp[i].acore2      = values.next_double();
 
           // read line five only when lgflag != 0
 
@@ -341,12 +343,12 @@ namespace ReaxFF {
           CHECK_COLUMNS(7);
 
           if ((j < ntypes) && (k < ntypes)) {
-            tbp[j][k].p_be2 = tbp[k][j].p_be2 = values.next_double();
-            tbp[j][k].p_bo3 = tbp[k][j].p_bo3 = values.next_double();
-            tbp[j][k].p_bo4 = tbp[k][j].p_bo4 = values.next_double();
-            values.skip();
-            tbp[j][k].p_bo1 = tbp[k][j].p_bo1 = values.next_double();
-            tbp[j][k].p_bo2 = tbp[k][j].p_bo2 = values.next_double();
+            tbp[j][k].p_be2  = tbp[k][j].p_be2  = values.next_double();
+            tbp[j][k].p_bo3  = tbp[k][j].p_bo3  = values.next_double();
+            tbp[j][k].p_bo4  = tbp[k][j].p_bo4  = values.next_double();
+            tbp[j][k].p_xel1 = tbp[k][j].p_xel1 = values.next_double();  // for ereaxff
+            tbp[j][k].p_bo1  = tbp[k][j].p_bo1  = values.next_double();
+            tbp[j][k].p_bo2  = tbp[k][j].p_bo2  = values.next_double();
             // if the 8th value is missing use 0.0
             if (values.has_next())
               tbp[j][k].ovc   = tbp[k][j].ovc   = values.next_double();
@@ -358,14 +360,14 @@ namespace ReaxFF {
         for (i=0; i < ntypes; ++i) {
           for (j=i; j < ntypes; ++j) {
             tbp[i][j].r_s     = tbp[j][i].r_s     = 0.5*(sbp[j].r_s + sbp[i].r_s);
-            tbp[i][j].r_p     = tbp[j][i].r_p     = 0.5*(sbp[j].r_pi + sbp[i].r_pi);
-            tbp[i][j].r_pp    = tbp[j][i].r_pp    = 0.5*(sbp[j].r_pi_pi + sbp[i].r_pi_pi);
+            tbp[i][j].r_p     = tbp[j][i].r_p     = 0.5*(sbp[j].r_p + sbp[i].r_p);
+            tbp[i][j].r_pp    = tbp[j][i].r_pp    = 0.5*(sbp[j].r_pp + sbp[i].r_pp);
             tbp[i][j].p_boc3  = tbp[j][i].p_boc3  = sqrt(sbp[j].b_o_132 * sbp[i].b_o_132);
             tbp[i][j].p_boc4  = tbp[j][i].p_boc4  = sqrt(sbp[j].b_o_131 * sbp[i].b_o_131);
             tbp[i][j].p_boc5  = tbp[j][i].p_boc5  = sqrt(sbp[j].b_o_133 * sbp[i].b_o_133);
             tbp[i][j].D       = tbp[j][i].D       = sqrt(sbp[j].epsilon * sbp[i].epsilon);
             tbp[i][j].alpha   = tbp[j][i].alpha   = sqrt(sbp[j].alpha * sbp[i].alpha);
-            tbp[i][j].r_vdW   = tbp[j][i].r_vdW   = 2.0*sqrt(sbp[j].r_vdw * sbp[i].r_vdw);
+            tbp[i][j].r_vdw   = tbp[j][i].r_vdw   = 2.0*sqrt(sbp[j].r_vdw * sbp[i].r_vdw);
             tbp[i][j].gamma_w = tbp[j][i].gamma_w = sqrt(sbp[j].gamma_w * sbp[i].gamma_w);
             tbp[i][j].gamma   = tbp[j][i].gamma   = pow(sbp[j].gamma * sbp[i].gamma,-1.5);
 
@@ -405,7 +407,7 @@ namespace ReaxFF {
             if (val > 0.0) tbp[j][k].D = tbp[k][j].D = val;
 
             val = values.next_double();
-            if (val > 0.0) tbp[j][k].r_vdW = tbp[k][j].r_vdW = 2*val;
+            if (val > 0.0) tbp[j][k].r_vdw = tbp[k][j].r_vdw = 2*val;
 
             val = values.next_double();
             if (val > 0.0) tbp[j][k].alpha = tbp[k][j].alpha = val;
@@ -582,8 +584,6 @@ namespace ReaxFF {
             hbp[j][k][l].p_hb3 = values.next_double();
           }
         }
-
-        memory->destroy(tor_flag);
       } catch (EOFException &e) {
         error->warning(FLERR, e.what());
       } catch (std::exception &e) {
@@ -606,6 +606,7 @@ namespace ReaxFF {
       memory->create(reax->thbp,n,n,n,"reaxff:thbp");
       memory->create(reax->hbp,n,n,n,"reaxff:hbp");
       memory->create(reax->fbp,n,n,n,n,"reaxff:fbp");
+      memory->create(reax->tor_flag,n,n,n,n,"reaxff:tor_flag");
     }
 
     // broadcast type specific force field data
@@ -614,6 +615,7 @@ namespace ReaxFF {
     MPI_Bcast(&(reax->thbp[0][0][0]),sizeof(three_body_header)*n*n*n,MPI_CHAR,0,world);
     MPI_Bcast(&(reax->hbp[0][0][0]),sizeof(hbond_parameters)*n*n*n,MPI_CHAR,0,world);
     MPI_Bcast(&(reax->fbp[0][0][0][0]),sizeof(four_body_header)*n*n*n*n,MPI_CHAR,0,world);
+    MPI_Bcast(&(reax->tor_flag[0][0][0][0]),sizeof(char)*n*n*n*n,MPI_CHAR,0,world);
 
     // apply global parameters to global control settings
 

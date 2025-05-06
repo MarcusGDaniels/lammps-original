@@ -18,6 +18,8 @@
       (Implemented original version in LAMMMPS Aug 2019)
       Navraj S Lalli, Imperial College London (navrajsinghlalli@gmail.com)
       (Reimplemented QTPIE as a new fix in LAMMPS Aug 2024 and extended functionality)
+      Mitch Murphy, alphataubio at gmail
+      (gauss_exp ffield unused ATM line 3 pos 3 to enable FitSNAP-ReaxFF)
 ------------------------------------------------------------------------- */
 
 #include "fix_qtpie_reaxff.h"
@@ -83,7 +85,7 @@ FixQtpieReaxFF::FixQtpieReaxFF(LAMMPS *lmp, int narg, char **arg) :
   maxwarn = 1;
   scale = 1.0;
 
-  if ((narg < 9) || (narg > 14)) error->all(FLERR,"Illegal fix {} command", style);
+  if ((narg < 8) || (narg > 14)) error->all(FLERR,"Illegal fix {} command", style);
 
   nevery = utils::inumeric(FLERR,arg[3],false,lmp);
   if (nevery <= 0) error->all(FLERR,"Illegal fix {} command", style);
@@ -92,9 +94,15 @@ FixQtpieReaxFF::FixQtpieReaxFF(LAMMPS *lmp, int narg, char **arg) :
   swb = utils::numeric(FLERR,arg[5],false,lmp);
   tolerance = utils::numeric(FLERR,arg[6],false,lmp);
   pertype_option = utils::strdup(arg[7]);
-  gauss_file = utils::strdup(arg[8]);
 
-  int iarg = 9;
+  int iarg;
+  if (utils::strmatch(pertype_option,"^reaxff"))
+    iarg = 8;
+  else {
+    gauss_file = utils::strdup(arg[8]);
+    iarg = 9;
+  }
+
   while (iarg < narg) {
     if (strcmp(arg[iarg],"nowarn") == 0) maxwarn = 0;
     else if (strcmp(arg[iarg],"maxiter") == 0) {
@@ -161,7 +169,6 @@ FixQtpieReaxFF::~FixQtpieReaxFF()
   if (copymode) return;
 
   delete[] pertype_option;
-  delete[] gauss_file;
 
   // unregister callbacks to this fix from Atom class
 
@@ -174,11 +181,11 @@ FixQtpieReaxFF::~FixQtpieReaxFF()
   FixQtpieReaxFF::deallocate_matrix();
 
   memory->destroy(shld);
-  memory->destroy(gauss_exp);
   memory->destroy(prefactor);
   memory->destroy(expfactor);
 
   if (!reaxflag) {
+    delete[] gauss_file;
     memory->destroy(chi);
     memory->destroy(eta);
     memory->destroy(gamma);
@@ -220,64 +227,27 @@ void FixQtpieReaxFF::pertype_parameters(char *arg)
   const int *type = atom->type;
   const int ntypes = atom->ntypes;
 
-  // read gaussian orbital exponents
-  memory->create(gauss_exp,ntypes+1,"qtpie/reaxff:gauss_exp");
-  if (comm->me == 0) {
-    gauss_exp[0] = 0.0;
-    try {
-      FILE *fp = utils::open_potential(gauss_file, lmp, nullptr);
-      if (!fp) throw TokenizerException("Fix qtpie/reaxff: could not open gauss file", gauss_file);
-      TextFileReader reader(fp,"qtpie/reaxff gaussian exponents");
-      reader.ignore_comments = true;
-      for (int i = 1; i <= ntypes; i++) {
-        const char *line = reader.next_line();
-        if (!line)
-          throw TokenizerException("Fix qtpie/reaxff: Incorrect number of atom types in gauss file","");
-        ValueTokenizer values(line);
-
-        if (values.count() != 2)
-          throw TokenizerException("Fix qtpie/reaxff: Incorrect number of values per line "
-                                   "in gauss file",std::to_string(values.count()));
-
-        int itype = values.next_int();
-        if ((itype < 1) || (itype > ntypes))
-          throw TokenizerException("Fix qtpie/reaxff: Invalid atom type in gauss file",
-                                   std::to_string(itype));
-
-        double exp = values.next_double();
-        if (exp < 0)
-          throw TokenizerException("Fix qtpie/reaxff: Invalid orbital exponent in gauss file",
-                                   std::to_string(exp));
-        gauss_exp[itype] = exp * ANGSTROM_TO_BOHRRADIUS_SQ;
-      }
-      fclose(fp);
-    } catch (std::exception &e) {
-      error->one(FLERR,e.what());
-    }
-  }
-
-  MPI_Bcast(gauss_exp,ntypes+1,MPI_DOUBLE,0,world);
-
-  // calculate a cutoff distance to neglect overlap integrals in calc_chi_eff()
-  // when less than pow(10, -olap_cut)
-  const double exp_min = find_min_exp(gauss_exp, ntypes+1);
-  const int olap_cut = 10;
-  dist_cutoff_sq = 2 * olap_cut * log(10.0) / exp_min;
-
-  // read chi, eta and gamma
-
   if (utils::strmatch(arg,"^reaxff")) {
     reaxflag = 1;
     Pair *pair = force->pair_match("^reaxff",0);
     if (!pair) error->all(FLERR,"No reaxff pair style for fix qtpie/reaxff");
 
-    int tmp, tmp_all;
-    chi = (double *) pair->extract("chi",tmp);
-    eta = (double *) pair->extract("eta",tmp);
-    gamma = (double *) pair->extract("gamma",tmp);
-    if ((chi == nullptr) || (eta == nullptr) || (gamma == nullptr))
+    int ignore_dim;
+    gauss_exp = (double *) pair->extract("gauss_exp", ignore_dim);
+    chi = (double *) pair->extract("chi", ignore_dim);
+    eta = (double *) pair->extract("eta", ignore_dim);
+    gamma = (double *) pair->extract("gamma", ignore_dim);
+
+    if ((gauss_exp == nullptr) || (chi == nullptr) || (eta == nullptr) || (gamma == nullptr))
       error->all(FLERR, "Fix qtpie/reaxff could not extract qtpie parameters from pair reaxff");
-    tmp = tmp_all = 0;
+
+    for (int itype = 1; itype <= ntypes; itype++) {
+      if (gauss_exp[itype] < 0.0)
+        error->all(FLERR, "Fix qtpie/reaxff: Invalid negative orbital exponent {} for atom type {}", gauss_exp[itype], itype);
+      gauss_exp[itype] *= ANGSTROM_TO_BOHRRADIUS_SQ;
+    }
+
+    int tmp = 0, tmp_all = 0;
     for (int i = 0; i < nlocal; ++i) {
       if (mask[i] & groupbit) {
         if ((chi[type[i]] == 0.0) && (eta[type[i]] == 0.0) && (gamma[type[i]] == 0.0))
@@ -287,52 +257,92 @@ void FixQtpieReaxFF::pertype_parameters(char *arg)
     MPI_Allreduce(&tmp, &tmp_all, 1, MPI_INT, MPI_MAX, world);
     if (tmp_all)
       error->all(FLERR, "No qtpie parameters for atom type {} provided by pair reaxff", tmp_all);
-    return;
+
   } else if (utils::strmatch(arg,"^reax/c")) {
     error->all(FLERR, "Fix qtpie/reaxff keyword 'reax/c' is obsolete; please use 'reaxff'");
+
   } else if (platform::file_is_readable(arg)) {
-    ; // arg is readable file. will read below
+    reaxflag = 0;
+
+    memory->create(gauss_exp, ntypes+1, "qtpie/reaxff:gauss_exp");
+    gauss_exp[0] = 0.0;
+
+    if (comm->me == 0) {
+      try {
+        FILE *fp = utils::open_potential(gauss_file, lmp, nullptr);
+        if (!fp) throw TokenizerException("Fix qtpie/reaxff: could not open gauss file", gauss_file);
+
+        TextFileReader reader(fp,"qtpie/reaxff gaussian exponents");
+        reader.ignore_comments = true;
+        for (int i = 1; i <= ntypes; i++) {
+          const char *line = reader.next_line();
+          if (!line) throw TokenizerException("Fix qtpie/reaxff: Incorrect number of atom types in gauss file", "");
+
+          ValueTokenizer values(line);
+          if (values.count() != 2)
+            throw TokenizerException("Fix qtpie/reaxff: Incorrect number of values per line in gauss file",
+                                     std::to_string(values.count()));
+
+          int itype = values.next_int();
+          if ((itype < 1) || (itype > ntypes))
+            throw TokenizerException("Fix qtpie/reaxff: Invalid atom type in gauss file", std::to_string(itype));
+
+          double exp = values.next_double();
+          if (exp < 0)
+            throw TokenizerException("Fix qtpie/reaxff: Invalid orbital exponent in gauss file", std::to_string(exp));
+
+          gauss_exp[itype] = exp * ANGSTROM_TO_BOHRRADIUS_SQ;
+        }
+        fclose(fp);
+      } catch (std::exception &e) {
+        error->one(FLERR, e.what());
+      }
+    }
+
+    MPI_Bcast(gauss_exp, ntypes+1, MPI_DOUBLE, 0, world);
+
+    memory->create(chi, ntypes+1, "qtpie/reaxff:chi");
+    memory->create(eta, ntypes+1, "qtpie/reaxff:eta");
+    memory->create(gamma, ntypes+1, "qtpie/reaxff:gamma");
+
+    if (comm->me == 0) {
+      chi[0] = eta[0] = gamma[0] = 0.0;
+      try {
+        TextFileReader reader(arg, "qtpie/reaxff parameter");
+        reader.ignore_comments = false;
+        for (int i = 1; i <= ntypes; i++) {
+          const char *line = reader.next_line();
+          if (!line) throw TokenizerException("Fix qtpie/reaxff: Invalid param file format", "");
+
+          ValueTokenizer values(line);
+          if (values.count() != 4)
+            throw TokenizerException("Fix qtpie/reaxff: Incorrect format of param file", "");
+
+          int itype = values.next_int();
+          if ((itype < 1) || (itype > ntypes))
+            throw TokenizerException("Fix qtpie/reaxff: Invalid atom type in param file", std::to_string(itype));
+
+          chi[itype] = values.next_double();
+          eta[itype] = values.next_double();
+          gamma[itype] = values.next_double();
+        }
+      } catch (std::exception &e) {
+        error->one(FLERR, e.what());
+      }
+    }
+
+    MPI_Bcast(chi, ntypes+1, MPI_DOUBLE, 0, world);
+    MPI_Bcast(eta, ntypes+1, MPI_DOUBLE, 0, world);
+    MPI_Bcast(gamma, ntypes+1, MPI_DOUBLE, 0, world);
+
   } else {
     error->all(FLERR, "Unknown fix qtpie/reaxff keyword {}", arg);
   }
 
-  reaxflag = 0;
+  const double exp_min = find_min_exp(gauss_exp, ntypes+1);
+  const int olap_cut = 10;
+  dist_cutoff_sq = 2.0 * olap_cut * log(10.0) / exp_min;
 
-  memory->create(chi,ntypes+1,"qtpie/reaxff:chi");
-  memory->create(eta,ntypes+1,"qtpie/reaxff:eta");
-  memory->create(gamma,ntypes+1,"qtpie/reaxff:gamma");
-
-  if (comm->me == 0) {
-    chi[0] = eta[0] = gamma[0] = 0.0;
-    try {
-      TextFileReader reader(arg,"qtpie/reaxff parameter");
-      reader.ignore_comments = false;
-      for (int i = 1; i <= ntypes; i++) {
-        const char *line = reader.next_line();
-        if (!line)
-          throw TokenizerException("Fix qtpie/reaxff: Invalid param file format","");
-        ValueTokenizer values(line);
-
-        if (values.count() != 4)
-          throw TokenizerException("Fix qtpie/reaxff: Incorrect format of param file","");
-
-        int itype = values.next_int();
-        if ((itype < 1) || (itype > ntypes))
-          throw TokenizerException("Fix qtpie/reaxff: Invalid atom type in param file",
-                                   std::to_string(itype));
-
-        chi[itype] = values.next_double();
-        eta[itype] = values.next_double();
-        gamma[itype] = values.next_double();
-      }
-    } catch (std::exception &e) {
-      error->one(FLERR,e.what());
-    }
-  }
-
-  MPI_Bcast(chi,ntypes+1,MPI_DOUBLE,0,world);
-  MPI_Bcast(eta,ntypes+1,MPI_DOUBLE,0,world);
-  MPI_Bcast(gamma,ntypes+1,MPI_DOUBLE,0,world);
 }
 
 /* ---------------------------------------------------------------------- */

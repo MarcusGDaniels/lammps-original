@@ -58,7 +58,7 @@ struct single_body_parameters {
   double r_vdw;
   double epsilon;
   double gamma;
-  double r_pi;
+  double r_p;
   double valency_e;
   double nlp_opt;
 
@@ -67,21 +67,25 @@ struct single_body_parameters {
   double gamma_w;
   double valency_boc;
   double p_ovun5;
+  double p_xel2;   // ereaxff
   double chi;
   double eta;
   int p_hbond;    // 1 for H, 2 for hbonding atoms (O,S,P,N), 0 for others
 
   /* Line three in field file */
-  double r_pi_pi;
+  double r_pp;
   double p_lp2;
+  double gauss_exp;   // for QTPIE (only supported in LAMMPS)
   double b_o_131;
   double b_o_132;
   double b_o_133;
-  double bcut_acks2;    // ACKS2 bond cutoff
+  double bcut_acks2;  // ACKS2 bond cutoff
+  double ealpha;      // ereaxff (NOT TO BE CONFUSED WITH VDW ALPHA)
 
   /* Line four in the field file */
   double p_ovun2;
   double p_val3;
+  double ebeta;       // ereaxff
   double valency_val;
   double p_val5;
   double rcore2;
@@ -110,7 +114,7 @@ struct two_body_parameters {
   /* Van der Waal interaction parameters */
   double D;
   double alpha;
-  double r_vdW;
+  double r_vdw;
   double gamma_w;
   double rcore, ecore, acore;
   double lgcij, lgre;
@@ -119,6 +123,9 @@ struct two_body_parameters {
   double gamma;    // note: this parameter is gamma^-3 and not gamma.
 
   double v13cor, ovc;
+
+  /* ereaxff */
+  double p_xel1;
 };
 
 struct dbond_coefficients {
@@ -175,6 +182,7 @@ struct reax_interaction {
   three_body_header ***thbp;
   hbond_parameters ***hbp;
   four_body_header ****fbp;
+  char ****tor_flag;
 };
 
 struct reax_atom {
@@ -235,6 +243,8 @@ struct control_params {
   LAMMPS_NS::Error *error_ptr;
   LAMMPS_NS::LAMMPS *lmp_ptr;
   int me;
+
+  int ereaxff_flag;
 };
 
 struct energy_data {

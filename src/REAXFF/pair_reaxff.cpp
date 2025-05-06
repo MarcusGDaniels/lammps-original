@@ -152,6 +152,7 @@ PairReaxFF::~PairReaxFF()
     memory->destroy(cutsq);
     memory->destroy(cutghost);
 
+    delete[] gauss_exp;
     delete[] chi;
     delete[] eta;
     delete[] gamma;
@@ -177,6 +178,7 @@ void PairReaxFF::allocate()
   map = new int[n+1];
   for (int i = 0; i <= n; ++i) map[i] = -1;
 
+  gauss_exp = new double[n+1];
   chi = new double[n+1];
   eta = new double[n+1];
   gamma = new double[n+1];
@@ -221,6 +223,7 @@ void PairReaxFF::settings(int narg, char **arg)
   api->system->minhbonds = REAX_MIN_HBONDS;
   api->system->safezone = REAX_SAFE_ZONE;
   api->system->saferzone = REAX_SAFER_ZONE;
+  api->control->ereaxff_flag = 0;
 
   // process optional keywords
 
@@ -267,6 +270,10 @@ void PairReaxFF::settings(int narg, char **arg)
       api->control->tabulate = utils::inumeric(FLERR,arg[iarg+1],false,lmp);
       if (api->control->tabulate < 0)
         error->all(FLERR,"Illegal pair_style reaxff tabulate command");
+      iarg += 2;
+    } else if (strcmp(arg[iarg],"ereaxff") == 0) {
+      if (iarg+2 > narg) error->all(FLERR,"Illegal pair_style reaxff command");
+      api->control->ereaxff_flag = utils::inumeric(FLERR,arg[iarg+1],false,lmp);
       iarg += 2;
     } else error->all(FLERR,"Illegal pair_style reaxff command");
   }
@@ -700,6 +707,13 @@ void PairReaxFF::read_reax_forces(int /*vflag*/)
 void *PairReaxFF::extract(const char *str, int &dim)
 {
   dim = 1;
+  if (strcmp(str,"gauss_exp") == 0 && gauss_exp) {
+    gauss_exp[0] = 0.0;
+    for (int i = 1; i <= atom->ntypes; i++)
+      if (map[i] >= 0) gauss_exp[i] = api->system->reax_param.sbp[map[i]].gauss_exp;
+      else gauss_exp[i] = 0.0;
+    return (void *) gauss_exp;
+  }
   if (strcmp(str,"chi") == 0 && chi) {
     chi[0] = 0.0;
     for (int i = 1; i <= atom->ntypes; i++)

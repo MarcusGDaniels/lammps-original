@@ -132,7 +132,10 @@ endif()
 
 # silence nvcc warnings
 if((PKG_KOKKOS) AND (Kokkos_ENABLE_CUDA) AND NOT (CMAKE_CXX_COMPILER_ID STREQUAL "Clang"))
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Xcudafe --diag_suppress=unrecognized_pragma,--diag_suppress=128")
+  add_compile_options(
+    -Xcudafe=--diag_suppress=unrecognized_pragma
+    -Xcudafe=--diag_suppress=128
+  )
 endif()
 
 # we *require* C++11 without extensions but prefer C++17.
@@ -633,7 +636,8 @@ endif()
 ########################################################################
 # Basic system tests (standard libraries, headers, functions, types)   #
 ########################################################################
-if (NOT ((CMAKE_CXX_COMPILER_ID STREQUAL "Intel") OR (CMAKE_CXX_COMPILER_ID STREQUAL "IntelLLVM")))
+if (NOT ((CMAKE_CXX_COMPILER_ID STREQUAL "Intel") OR (CMAKE_CXX_COMPILER_ID STREQUAL "IntelLLVM") OR
+         (CMAKE_CXX_COMPILER_ID STREQUAL "NVHPC")))
   check_include_file_cxx(cmath FOUND_CMATH)
   if(NOT FOUND_CMATH)
     message(FATAL_ERROR "Could not find the required 'cmath' header")

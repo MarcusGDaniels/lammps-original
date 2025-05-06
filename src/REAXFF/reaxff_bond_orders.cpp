@@ -164,12 +164,12 @@ namespace ReaxFF {
       BO_s = (1.0 + bo_cut) * exp(C12);
     } else BO_s = C12 = 0.0;
 
-    if (sbp_i->r_pi > 0.0 && sbp_j->r_pi > 0.0) {
+    if (sbp_i->r_p > 0.0 && sbp_j->r_p > 0.0) {
       C34 = twbp->p_bo3 * pow(nbr_pj->d / twbp->r_p, twbp->p_bo4);
       BO_pi = exp(C34);
     } else BO_pi = C34 = 0.0;
 
-    if (sbp_i->r_pi_pi > 0.0 && sbp_j->r_pi_pi > 0.0) {
+    if (sbp_i->r_pp > 0.0 && sbp_j->r_pp > 0.0) {
       C56 = twbp->p_bo5 * pow(nbr_pj->d / twbp->r_pp, twbp->p_bo6);
       BO_pi2= exp(C56);
     } else BO_pi2 = C56 = 0.0;

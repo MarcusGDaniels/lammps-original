@@ -39,6 +39,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <string>
 
 #ifdef LMP_GPU
 #include "fix_gpu.h"
@@ -219,6 +220,10 @@ Atom::Atom(LAMMPS *_lmp) : Pointers(_lmp), atom_style(nullptr), avec(nullptr), a
   // DIELECTRIC package
 
   area = ed = em = epsilon = curvature = q_scaled = nullptr;
+
+  // CHARMM package
+
+  segment = residue = name = nullptr;
 
   // end of customization section
   // --------------------------------------------------------------------
@@ -575,6 +580,12 @@ void Atom::peratom_create()
   add_peratom("curvature",&curvature,DOUBLE,0);
   add_peratom("q_scaled",&q_scaled,DOUBLE,0);
 
+  // CHARMM package
+
+  add_peratom("segment",&segment,STRING,0);
+  add_peratom("residue",&residue,STRING,0);
+  add_peratom("name",&name,STRING,0);
+
   // end of customization section
   // --------------------------------------------------------------------
 }
@@ -658,6 +669,7 @@ void Atom::set_atomflag_defaults()
   contact_radius_flag = smd_data_9_flag = smd_stress_flag = 0;
   eff_plastic_strain_flag = eff_plastic_strain_rate_flag = 0;
   nspecial15_flag = 0;
+  segment_flag = residue_flag = name_flag = 0;
 
   pdscale = 1.0;
 }
@@ -2281,8 +2293,6 @@ void Atom::add_molecule_atom(Molecule *onemol, int iatom, int ilocal, tagint off
 
 void Atom::add_label_map()
 {
-  if (lmp->kokkos)
-    error->all(FLERR, "Label maps are currently not supported with Kokkos");
   labelmapflag = 1;
   lmap = new LabelMap(lmp,ntypes,nbondtypes,nangletypes,ndihedraltypes,nimpropertypes);
 }
@@ -3146,6 +3156,14 @@ void *Atom::extract(const char *name)
   if (strcmp(name,"curvature") == 0) return (void *) curvature;
   if (strcmp(name,"q_scaled") == 0) return (void *) q_scaled;
 
+  // CHARMM package
+
+  if (strcmp(name,"segment") == 0) return (void *) segment;
+  if (strcmp(name,"residue") == 0) return (void *) residue;
+  // avoid conflict between function parameter and class member variable with this->
+  if (strcmp(name,"name") == 0) return (void *) this->name;
+
+
   // end of customization section
   // --------------------------------------------------------------------
 
@@ -3303,6 +3321,12 @@ int Atom::extract_datatype(const char *name)
   if (strcmp(name,"epsilon") == 0) return LAMMPS_DOUBLE;
   if (strcmp(name,"curvature") == 0) return LAMMPS_DOUBLE;
   if (strcmp(name,"q_unscaled") == 0) return LAMMPS_DOUBLE;
+
+  // CHARMM package
+
+  if (strcmp(name,"segment") == 0) return LAMMPS_STRING;
+  if (strcmp(name,"residue") == 0) return LAMMPS_STRING;
+  if (strcmp(name,"name") == 0) return LAMMPS_STRING;
 
   // end of customization section
   // --------------------------------------------------------------------
@@ -3545,6 +3569,12 @@ int Atom::extract_size(const char *name, int type)
     if (strcmp(name,"epsilon") == 0) return nall;
     if (strcmp(name,"curvature") == 0) return nall;
     if (strcmp(name,"q_unscaled") == 0) return nall;
+
+    // CHARMM package
+
+    if (strcmp(name,"segment") == 0) return nall;
+    if (strcmp(name,"residue") == 0) return nall;
+    if (strcmp(name,"name") == 0) return nall;
 
     // end of customization section
     // --------------------------------------------------------------------

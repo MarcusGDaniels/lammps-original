@@ -167,7 +167,11 @@ void Error::one(const std::string &file, int line, int failed, const std::string
   std::string mesg = fmt::format("ERROR on proc {}: {} ({}:{})\n", me, str, truncpath(file), line);
   if (failed > NOPOINTER) mesg += utils::point_to_error(input, failed);
   if (failed == ARGZERO) mesg += utils::point_to_error(input, 0);
-  if (showerror) utils::logmesg(lmp,mesg);
+
+  if (showerror) {
+    utils::logmesg(lmp,mesg);
+    utils::flush_buffers(lmp);  // make sure error message not lost in unflushed buffer
+  }
 
   if (showerror && (universe->nworlds > 1)) {
     if (universe->uscreen) fputs(mesg.c_str(),universe->uscreen);

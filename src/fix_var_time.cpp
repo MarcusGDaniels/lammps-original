@@ -13,10 +13,11 @@
 ------------------------------------------------------------------------- */
 
 /* ----------------------------------------------------------------------
-   Contributing author: Pieter in 't Veld (SNL)
+   Contributing author: Germain Clavier (Unicaen),
+   derivated from variance/time code by Pieter in 't Veld (SNL)
 ------------------------------------------------------------------------- */
 
-#include "fix_ave_time.h"
+#include "fix_variance_time.h"
 
 #include "arg_info.h"
 #include "comm.h"
@@ -30,21 +31,23 @@
 
 #include <cstring>
 #include <stdexcept>
+#include <iostream>
 
 using namespace LAMMPS_NS;
 using namespace FixConst;
 
-enum { ONE, RUNNING, WINDOW };
-enum { SCALAR, VECTOR };
+enum{ ONE, RUNNING, WINDOW };
+enum{ SCALAR, VECTOR };
 
 /* ---------------------------------------------------------------------- */
 
-FixAveTime::FixAveTime(LAMMPS *lmp, int narg, char **arg) :
-    Fix(lmp, narg, arg), nvalues(0), fp(nullptr), offlist(nullptr), format(nullptr), vector(nullptr),
-    vector_total(nullptr), vector_list(nullptr), column(nullptr), array(nullptr),
-    array_total(nullptr), array_list(nullptr)
+FixVarTime::FixVarTime(LAMMPS *lmp, int narg, char **arg) :
+  Fix(lmp, narg, arg),
+  nvalues(0), fp(nullptr), offlist(nullptr), format(nullptr), format_user(nullptr),
+  vector(nullptr), vector_total(nullptr), vector_list(nullptr),
+  column(nullptr), array(nullptr), array_total(nullptr), array_list(nullptr)
 {
-  if (narg < 7) utils::missing_cmd_args(FLERR, "fix ave/time", error);
+  if (narg < 7) utils::missing_cmd_args(FLERR, "fix variance/time", error);
 
   nevery = utils::inumeric(FLERR,arg[3],false,lmp);
   nrepeat = utils::inumeric(FLERR,arg[4],false,lmp);
@@ -59,9 +62,7 @@ FixAveTime::FixAveTime(LAMMPS *lmp, int narg, char **arg) :
   // then read options so know mode = SCALAR/VECTOR before re-reading values
 
   nvalues = 0;
-  // the first six arguments have fixed positions
-  const int ioffset = 6;
-  int iarg = ioffset;
+  int iarg = 6;
   while (iarg < narg) {
     if (utils::strmatch(arg[iarg],"^[cfv]_")) {
       nvalues++;
@@ -69,10 +70,9 @@ FixAveTime::FixAveTime(LAMMPS *lmp, int narg, char **arg) :
     } else break;
   }
   if (nvalues == 0)
-    error->all(FLERR, ioffset,
-               "No values from computes, fixes, or variables used in fix ave/time command");
+    error->all(FLERR,"No values from computes, fixes, or variables used in fix variance/time command");
 
-  // parse optional keywords which must follow the data
+  // parse optional keywords
 
   options(iarg,narg,arg);
 
@@ -81,11 +81,10 @@ FixAveTime::FixAveTime(LAMMPS *lmp, int narg, char **arg) :
 
   int expand = 0;
   char **earg;
-  int *amap = nullptr;
-  nvalues = utils::expand_args(FLERR, nvalues, &arg[ioffset], mode, earg, lmp, &amap);
+  nvalues = utils::expand_args(FLERR,nvalues,&arg[6],mode,earg,lmp);
   key2col.clear();
 
-  if (earg != &arg[ioffset]) expand = 1;
+  if (earg != &arg[6]) expand = 1;
   arg = earg;
 
   // parse values
@@ -99,127 +98,111 @@ FixAveTime::FixAveTime(LAMMPS *lmp, int narg, char **arg) :
     val.which = argi.get_type();
     key2col[arg[i]] = i;
 
+    if ((val.which == ArgInfo::NONE) || (val.which == ArgInfo::UNKNOWN) || (argi.get_dim() > 1))
+      error->all(FLERR,"Invalid fix variance/time argument: {}", arg[i]);
+
     val.argindex = argi.get_index1();
-    if (expand) val.iarg = amap[i] + ioffset;
-    else val.iarg = i + ioffset;
     val.varlen = 0;
     val.offcol = 0;
     val.id = argi.get_name();
     val.val.c = nullptr;
 
-    if ((val.which == ArgInfo::NONE) || (val.which == ArgInfo::UNKNOWN) || (argi.get_dim() > 1))
-      error->all(FLERR, val.iarg, "Invalid fix ave/time argument: {}", arg[i]);
-
     values.push_back(val);
   }
   if (nvalues != (int)values.size())
-    error->all(FLERR, Error::NOPOINTER,
-               "Could not parse value data consistently for fix ave/time");
+    error->all(FLERR, "Could not parse value data consistently for fix variance/time");
 
   // set off columns now that nvalues is finalized
 
   for (int i = 0; i < noff; i++) {
     if (offlist[i] < 1 || offlist[i] > nvalues)
-      error->all(FLERR, Error::NOPOINTER, "Invalid fix ave/time off column: {}", offlist[i]);
-    values[offlist[i] - 1].offcol = 1;
+      error->all(FLERR,"Invalid fix variance/time off column: {}", offlist[i]);
+    values[offlist[i]-1].offcol = 1;
   }
 
   // setup and error check
   // for fix inputs, check that fix frequency is acceptable
   // set variable_length if any compute is variable length
 
-  if (nevery <= 0) error->all(FLERR, 3, "Illegal fix ave/time nevery value: {}", nevery);
-  if (nrepeat <= 0) error->all(FLERR, 4, "Illegal fix ave/time nrepeat value: {}", nrepeat);
-  if (nfreq <= 0) error->all(FLERR, 5, "Illegal fix ave/time nfreq value: {}", nfreq);
+  if (nevery <= 0) error->all(FLERR,"Illegal fix variance/time nevery value: {}", nevery);
+  if (nrepeat <= 0) error->all(FLERR,"Illegal fix variance/time nrepeat value: {}", nrepeat);
+  if (nfreq <= 0) error->all(FLERR,"Illegal fix variance/time nfreq value: {}", nfreq);
   if (nfreq % nevery || nrepeat*nevery > nfreq)
-    error->all(FLERR, Error::NOPOINTER, "Inconsistent fix ave/time nevery/nrepeat/nfreq values");
+    error->all(FLERR,"Inconsistent fix variance/time nevery/nrepeat/nfreq values");
   if (ave != RUNNING && overwrite)
-    error->all(FLERR, Error::NOPOINTER, "Fix ave/time overwrite keyword requires ave running setting");
+    error->all(FLERR,"Fix variance/time overwrite keyword requires ave running setting");
 
   for (auto &val : values) {
 
     if ((val.which == ArgInfo::COMPUTE) && (mode == SCALAR)) {
       val.val.c = modify->get_compute_by_id(val.id);
-      if (!val.val.c)
-        error->all(FLERR, val.iarg, "Compute ID {} for fix ave/time does not exist", val.id);
+      if (!val.val.c) error->all(FLERR,"Compute ID {} for fix variance/time does not exist", val.id);
       if (val.argindex == 0 && (val.val.c->scalar_flag == 0))
-        error->all(FLERR, val.iarg, "Fix ave/time compute {} does not calculate a scalar", val.id);
+        error->all(FLERR,"Fix variance/time compute {} does not calculate a scalar", val.id);
       if (val.argindex && (val.val.c->vector_flag == 0))
-        error->all(FLERR, val.iarg, "Fix ave/time compute {} does not calculate a vector", val.id);
+        error->all(FLERR,"Fix variance/time compute {} does not calculate a vector", val.id);
       if (val.argindex && (val.argindex > val.val.c->size_vector) &&
           (val.val.c->size_vector_variable == 0))
-        error->all(FLERR, val.iarg, "Fix ave/time compute {} vector is accessed out-of-range{}",
-                   val.id, utils::errorurl(20));
+        error->all(FLERR, "Fix variance/time compute {} vector is accessed out-of-range", val.id);
       if (val.argindex && val.val.c->size_vector_variable) val.varlen = 1;
 
     } else if ((val.which == ArgInfo::COMPUTE) && (mode == VECTOR)) {
       val.val.c = modify->get_compute_by_id(val.id);
-      if (!val.val.c)
-        error->all(FLERR, val.iarg, "Compute ID {} for fix ave/time does not exist", val.id);
+      if (!val.val.c) error->all(FLERR,"Compute ID {} for fix variance/time does not exist", val.id);
       if ((val.argindex == 0) && (val.val.c->vector_flag == 0))
-        error->all(FLERR, val.iarg, "Fix ave/time compute {} does not calculate a vector", val.id);
+        error->all(FLERR,"Fix variance/time compute {} does not calculate a vector", val.id);
       if (val.argindex && (val.val.c->array_flag == 0))
-        error->all(FLERR, val.iarg, "Fix ave/time compute {} does not calculate an array", val.id);
+        error->all(FLERR,"Fix variance/time compute {} does not calculate an array", val.id);
       if (val.argindex && (val.argindex > val.val.c->size_array_cols))
-        error->all(FLERR, val.iarg, "Fix ave/time compute {} array is accessed out-of-range{}",
-                   val.id, utils::errorurl(20));
+        error->all(FLERR,"Fix variance/time compute {} array is accessed out-of-range", val.id);
       if ((val.argindex == 0) && (val.val.c->size_vector_variable)) val.varlen = 1;
       if (val.argindex && (val.val.c->size_array_rows_variable)) val.varlen = 1;
 
     } else if ((val.which == ArgInfo::FIX) && (mode == SCALAR)) {
       val.val.f = modify->get_fix_by_id(val.id);
-      if (!val.val.f) error->all(FLERR,"Fix ID {} for fix ave/time does not exist", val.id);
+      if (!val.val.f) error->all(FLERR,"Fix ID {} for fix variance/time does not exist", val.id);
       if ((val.argindex == 0) && (val.val.f->scalar_flag == 0))
-        error->all(FLERR, val.iarg, "Fix ave/time fix {} does not calculate a scalar", val.id);
+        error->all(FLERR,"Fix variance/time fix {} does not calculate a scalar", val.id);
       if (val.argindex && (val.val.f->vector_flag == 0))
-        error->all(FLERR, val.iarg, "Fix ave/time fix {} does not calculate a vector", val.id);
+        error->all(FLERR,"Fix variance/time fix {} does not calculate a vector", val.id);
       if (val.argindex && (val.val.f->size_vector_variable))
-        error->all(FLERR, val.iarg, "Fix ave/time fix {} vector cannot be variable length", val.id);
+        error->all(FLERR,"Fix variance/time fix {} vector cannot be variable length", val.id);
       if (val.argindex && (val.argindex > val.val.f->size_vector))
-        error->all(FLERR, val.iarg, "Fix ave/time fix {} vector is accessed out-of-range{}",
-                   val.id, utils::errorurl(20));
+        error->all(FLERR,"Fix variance/time fix {} vector is accessed out-of-range", val.id);
       if (nevery % val.val.f->global_freq)
-        error->all(FLERR, val.iarg, "Fix {} for fix ave/time not computed at compatible time{}",
-                   val.id, utils::errorurl(7));
+        error->all(FLERR, "Fix {} for fix variance/time not computed at compatible time", val.id);
 
     } else if ((val.which == ArgInfo::FIX) && (mode == VECTOR)) {
       val.val.f = modify->get_fix_by_id(val.id);
-      if (!val.val.f)
-        error->all(FLERR, val.iarg, "Fix ID {} for fix ave/time does not exist", val.id);
+      if (!val.val.f) error->all(FLERR,"Fix ID {} for fix variance/time does not exist", val.id);
       if ((val.argindex == 0) && (val.val.f->vector_flag == 0))
-        error->all(FLERR, val.iarg, "Fix ave/time fix {} does not calculate a vector", val.id);
+        error->all(FLERR,"Fix variance/time fix {} does not calculate a vector", val.id);
       if (val.argindex && (val.val.f->array_flag == 0))
-        error->all(FLERR, val.iarg, "Fix ave/time fix {} does not calculate an array", val.id);
+        error->all(FLERR,"Fix variance/time fix {} does not calculate an array", val.id);
       if (val.argindex && (val.val.f->size_array_rows_variable))
-        error->all(FLERR, val.iarg, "Fix ave/time fix {} array cannot have variable row length",
-                   val.id);
+        error->all(FLERR,"Fix variance/time fix {} array cannot have variable row length", val.id);
       if (val.argindex && (val.argindex > val.val.f->size_array_cols))
-        error->all(FLERR, val.iarg, "Fix ave/time fix {} array is accessed out-of-range{}",
-                   val.id, utils::errorurl(20));
+        error->all(FLERR,"Fix variance/time fix {} array is accessed out-of-range", val.id);
       if (nevery % val.val.f->global_freq)
-        error->all(FLERR, val.iarg, "Fix {} for fix ave/time not computed at compatible time{}",
-                   val.id, utils::errorurl(7));
+        error->all(FLERR, "Fix {} for fix variance/time not computed at compatible time", val.id);
 
     } else if ((val.which == ArgInfo::VARIABLE) && (mode == SCALAR)) {
       int ivariable = input->variable->find(val.id.c_str());
       if (ivariable < 0)
-        error->all(FLERR, val.iarg, "Variable name {} for fix ave/time does not exist", val.id);
+        error->all(FLERR,"Variable name {} for fix variance/time does not exist", val.id);
       if ((val.argindex == 0) && (input->variable->equalstyle(ivariable) == 0))
-        error->all(FLERR, val.iarg, "Fix ave/time variable {} is not equal-style variable", val.id);
+        error->all(FLERR,"Fix variance/time variable {} is not equal-style variable", val.id);
       if ((val.argindex) && (input->variable->vectorstyle(ivariable) == 0))
-        error->all(FLERR, val.iarg, "Fix ave/time variable {} is not vector-style variable",
-                   val.id);
+        error->all(FLERR,"Fix variance/time variable {} is not vector-style variable", val.id);
 
     } else if ((val.which == ArgInfo::VARIABLE) && (mode == VECTOR)) {
       int ivariable = input->variable->find(val.id.c_str());
       if (ivariable < 0)
-        error->all(FLERR, val.iarg, "Variable name {} for fix ave/time does not exist", val.id);
+        error->all(FLERR,"Variable name {} for fix variance/time does not exist", val.id);
       if ((val.argindex == 0) && (input->variable->vectorstyle(ivariable) == 0))
-        error->all(FLERR, val.iarg, "Fix ave/time variable {} is not vector-style variable",
-                   val.id);
+        error->all(FLERR,"Fix variance/time variable {} is not vector-style variable", val.id);
       if (val.argindex)
-        error->all(FLERR, val.iarg, "Fix ave/time mode vector variable {} cannot be indexed",
-                   val.id);
+        error->all(FLERR,"Fix variance/time mode vector variable {} cannot be indexed", val.id);
       val.varlen = 1;
     }
   }
@@ -242,7 +225,7 @@ FixAveTime::FixAveTime(LAMMPS *lmp, int narg, char **arg) :
   if (mode == VECTOR) {
     if (all_variable_length == 0) nrows = column_length(0);
     else nrows = 1;
-    memory->create(column,nrows,"ave/time:column");
+    memory->create(column,nrows,"variance/time:column");
   }
 
   // enable locking of row count by this fix for computes of variable length
@@ -263,29 +246,21 @@ FixAveTime::FixAveTime(LAMMPS *lmp, int narg, char **arg) :
   if (fp && comm->me == 0) {
     clearerr(fp);
     if (title1) fprintf(fp,"%s\n",title1);
-    else fprintf(fp,"# Time-averaged data for fix %s\n",id);
+    else fprintf(fp,"# Variance value of data for fix %s\n",id);
     if (title2) fprintf(fp,"%s\n",title2);
     else if (mode == SCALAR) {
       fprintf(fp,"# TimeStep");
-      for (int i = 0; i < nvalues; i++) {
-          fprintf(fp," %s",earg[i]);
-          if (variance) fprintf(fp," %s.var",earg[i]);
-      }
+      for (int i = 0; i < nvalues; i++) fprintf(fp," %s",earg[i]);
       fprintf(fp,"\n");
     } else fprintf(fp,"# TimeStep Number-of-rows\n");
     if (title3 && mode == VECTOR) fprintf(fp,"%s\n",title3);
     else if (mode == VECTOR) {
       fprintf(fp,"# Row");
-      for (int i = 0; i < nvalues; i++) {
-          fprintf(fp," %s",earg[i]);
-          if (variance) fprintf(fp," %s.var",earg[i]);
-      }
+      for (int i = 0; i < nvalues; i++) fprintf(fp," %s",earg[i]);
       fprintf(fp,"\n");
     }
     if (yaml_flag) fputs("---\n",fp);
-    if (ferror(fp))
-      error->one(FLERR, Error::NOLASTLINE, "Error writing fix ave/time ID {} file header: {}",
-                 id, utils::getsyserror());
+    if (ferror(fp)) error->one(FLERR,"Error writing file header: {}", utils::getsyserror());
     filepos = platform::ftell(fp);
   }
 
@@ -299,7 +274,6 @@ FixAveTime::FixAveTime(LAMMPS *lmp, int narg, char **arg) :
   if (expand) {
     for (int i = 0; i < nvalues; i++) delete[] earg[i];
     memory->sfree(earg);
-    memory->sfree(amap);
   }
 
   // allocate memory for averaging
@@ -309,28 +283,26 @@ FixAveTime::FixAveTime(LAMMPS *lmp, int narg, char **arg) :
   array = array_total = nullptr;
   array_list = nullptr;
 
-  // also allocate memory for variance
-  varmold = varmnew = nullptr;
-  varsold = varsnew = nullptr;
-  variance_total = nullptr;
-  variance_list = nullptr;
-  varmold_array = varmnew_array = nullptr;
-  varsold_array = varsnew_array = nullptr;
-  variance_array = nullptr;
-  variance_array_list = nullptr;
+  MOld = MNew = nullptr;
+  SOld = nullptr;
+
+  /* For WINDOW style averaging*/
+  values_array = nullptr;
+
+  /* For vector computation*/
+  MOld_array = MNew_array = nullptr;
+  SOld_array = nullptr;
+
+  /* For WINDOW style averaging*/
+  values_vectors_array = nullptr;
 
   if (mode == SCALAR) {
     vector = new double[nvalues];
     vector_total = new double[nvalues];
-    if (ave == WINDOW) memory->create(vector_list,nwindow,nvalues,"ave/time:vector_list");
-    if (variance) {
-      varmold = new double[nvalues];
-      varmnew = new double[nvalues];
-      varsold = new double[nvalues];
-      varsnew = new double[nvalues];
-      variance_total = new double[nvalues];
-      if (ave == WINDOW) memory->create(variance_list,nwindow,nvalues,"ave/time:variance_list");
-    }
+    MOld = new double[nvalues];
+    MNew = new double[nvalues];
+    SOld = new double[nvalues];
+    if (ave == WINDOW) memory->create(values_array,nrepeat*nwindow,nvalues,"variance/time:values_array");
   } else allocate_arrays();
 
   // this fix produces either a global scalar or vector or array
@@ -423,12 +395,12 @@ FixAveTime::FixAveTime(LAMMPS *lmp, int narg, char **arg) :
           extvalue = 0;
         }
         if (extvalue == -1)
-          error->all(FLERR, Error::NOLASTLINE, "Fix ave/time cannot set output array "
-                     "intensive/extensive from these inputs");
+          error->all(FLERR,"Fix variance/time cannot set output array intensive/extensive "
+                     "from these inputs");
         if (extarray < -1) extarray = extvalue;
         else if (extvalue != extarray)
-          error->all(FLERR, Error::NOLASTLINE, "Fix ave/time cannot set output array "
-                     "intensive/extensive from these inputs");
+          error->all(FLERR,"Fix variance/time cannot set output array intensive/extensive "
+                     "from these inputs");
       }
     }
   }
@@ -440,16 +412,19 @@ FixAveTime::FixAveTime(LAMMPS *lmp, int narg, char **arg) :
   irepeat = 0;
   iwindow = window_limit = 0;
   norm = 0;
+  nloop = 0;
 
   if (mode == SCALAR) {
     for (int i = 0; i < nvalues; i++) {
       vector_total[i] = 0.0;
-      if (variance) {
-        varmold[i] = 0.0;
-        varmnew[i] = 0.0;
-        varsold[i] = 0.0;
-        varsnew[i] = 0.0;
-        varrepeat = 0;
+      vector[i] = 0.0;
+      MOld[i] = 0.0;
+      MNew[i] = 0.0;
+      SOld[i] = 0.0;
+      if (ave == WINDOW) {
+        for (int j = 0; j < nrepeat*nwindow; j++) {
+          values_array[j][i] = 0.0;
+        }
       }
     }
   }
@@ -466,7 +441,7 @@ FixAveTime::FixAveTime(LAMMPS *lmp, int narg, char **arg) :
 
 /* ---------------------------------------------------------------------- */
 
-FixAveTime::~FixAveTime()
+FixVarTime::~FixVarTime()
 {
   // decrement lock counter in compute chunk/atom, it if still exists
 
@@ -483,7 +458,7 @@ FixAveTime::~FixAveTime()
     }
   }
 
-  delete[] format;
+  delete[] format_user;
   delete[] extlist;
 
   if (fp && comm->me == 0) {
@@ -497,26 +472,14 @@ FixAveTime::~FixAveTime()
   memory->destroy(array);
   memory->destroy(array_total);
   memory->destroy(array_list);
-  if (variance) {
-    delete[] varmold;
-    delete[] varmnew;
-    delete[] varsold;
-    delete[] varsnew;
-    delete[] variance_total;
-    delete[] variance_list;
-    memory->destroy(variance_array);
-    memory->destroy(varmold_array);
-    memory->destroy(varmnew_array);
-    memory->destroy(varsold_array);
-    memory->destroy(varsnew_array);
-    memory->destroy(variance_array_list);
-  }
-
+  delete[] MOld;
+  delete[] MNew;
+  delete[] SOld;
 }
 
 /* ---------------------------------------------------------------------- */
 
-int FixAveTime::setmask()
+int FixVarTime::setmask()
 {
   int mask = 0;
   mask |= END_OF_STEP;
@@ -525,7 +488,7 @@ int FixAveTime::setmask()
 
 /* ---------------------------------------------------------------------- */
 
-void FixAveTime::init()
+void FixVarTime::init()
 {
   // update indices/pointers for all computes,fixes,variables
 
@@ -533,17 +496,15 @@ void FixAveTime::init()
     if (val.which == ArgInfo::COMPUTE) {
       val.val.c = modify->get_compute_by_id(val.id);
       if (!val.val.c)
-        error->all(FLERR, Error::NOLASTLINE, "Compute ID {} for fix ave/time does not exist",
-                   val.id);
+        error->all(FLERR,"Compute ID {} for fix variance/time does not exist", val.id);
     } else if (val.which == ArgInfo::FIX) {
       val.val.f = modify->get_fix_by_id(val.id);
       if (!val.val.f)
-        error->all(FLERR, Error::NOLASTLINE, "Fix ID {} for fix ave/time does not exist", val.id);
+        error->all(FLERR,"Fix ID {} for fix variance/time does not exist", val.id);
     } else if (val.which == ArgInfo::VARIABLE) {
       val.val.v = input->variable->find(val.id.c_str());
       if (val.val.v < 0)
-        error->all(FLERR, Error::NOLASTLINE, "Variable name {} for fix ave/time does not exist",
-                   val.id);
+        error->all(FLERR,"Variable name {} for fix variance/time does not exist", val.id);
     }
   }
 
@@ -560,14 +521,14 @@ void FixAveTime::init()
    only does something if nvalid = current timestep
 ------------------------------------------------------------------------- */
 
-void FixAveTime::setup(int /*vflag*/)
+void FixVarTime::setup(int /*vflag*/)
 {
   end_of_step();
 }
 
 /* ---------------------------------------------------------------------- */
 
-void FixAveTime::end_of_step()
+void FixVarTime::end_of_step()
 {
   // skip if not step which requires doing something
 
@@ -576,12 +537,12 @@ void FixAveTime::end_of_step()
   nvalid_last = nvalid;
 
   if (mode == SCALAR) invoke_scalar(ntimestep);
-  else invoke_vector(ntimestep);
+  // else invoke_vector(ntimestep);
 }
 
 /* ---------------------------------------------------------------------- */
 
-void FixAveTime::invoke_scalar(bigint ntimestep)
+void FixVarTime::invoke_scalar(bigint ntimestep)
 {
   // zero if first sample within single Nfreq epoch
   // if any input is variable length, initialize current length
@@ -594,11 +555,11 @@ void FixAveTime::invoke_scalar(bigint ntimestep)
       modify->addstep_compute(ntimestep+nevery);
       modify->addstep_compute(ntimestep+nfreq);
     }
-    for (int i = 0; i < nvalues; i++) {
-      vector[i] = 0.0;
-      if (variance && ave == ONE) {
-        varmold[i] = varmnew[i] = varsold[i] = varsnew[i] = 0.0;
-        varrepeat = 0;
+    if (ave == ONE) {
+      nloop = 0;
+      for (int i = 0; i < nvalues; i++) {
+        vector[i] = 0.0;
+        MOld[i] = MNew[i] = SOld[i] = 0.0;
       }
     }
   }
@@ -610,6 +571,11 @@ void FixAveTime::invoke_scalar(bigint ntimestep)
 
   int i = 0;
   double scalar = 0.0;
+
+  // For WINDOW style computation: k indicates the place of the value to change
+  int k = 0;
+  int nmax = 0;
+
   for (auto &val : values) {
 
     // invoke compute if not previously invoked
@@ -655,26 +621,56 @@ void FixAveTime::invoke_scalar(bigint ntimestep)
       }
     }
 
-    // add value to vector or just set directly if offcol is set
+    // computes value to vector or just set directly if offcol is set
 
-    if (val.offcol) vector[i] = scalar;
-    else vector[i] += scalar;
-
-    // If Welford's variance is to be computed, it has to be done here
-    // because you need to account for all the values.
-
-    // if (variance && !val.offcol) {
-    //   update_variance_scalar(i, scalar);
-    // }
-
-    if (variance && !val.offcol) {
-      if (varrepeat==0) {
-        varmnew[i] = scalar;
+    if (val.offcol) {
+        vector[i] = scalar;
+    } else {
+      // WINDOW is the special case where we need to recompute all the values
+      // everytime. To this end values_array lists all the necessary values.
+      // The variance is then recomputed everytime using all the required
+      // values. A necessary evil for consistency.
+      if (ave == WINDOW) {
+          k = nrepeat*(iwindow%nwindow) + irepeat;
+          values_array[k][i] = scalar;
+          if (irepeat == nrepeat-1) {
+            // We compute WINDOW style only when nrepeat is reached.
+            MNew[i] = values_array[0][i];
+            vector[i] = 0.;
+            if (window_limit) {
+              // Using all the values
+              nmax = nrepeat*nwindow;
+            } else {
+              // Stopping where we're at.
+              nmax = k+1;
+            }
+            for (int j = 0; j < nmax; j++) {
+              MOld[i] = MNew[i];
+              SOld[i] = vector[i];
+              MNew[i] = MOld[i] + (values_array[j][i] - MOld[i])/(j+1);
+              vector[i] = SOld[i] + (values_array[j][i] - MOld[i])*(values_array[j][i] - MNew[i]);
+            }
+          }
+      } else if (ave == RUNNING) {
+        if (!irepeat && !nloop) {
+          vector[i] = 0;
+          MNew[i] = scalar;
+        } else {
+          MOld[i] = MNew[i];
+          SOld[i] = vector[i];
+          MNew[i] = MOld[i] + (scalar - MOld[i])/(nloop*nrepeat+irepeat+1);
+          vector[i] = SOld[i] + (scalar - MOld[i])*(scalar - MNew[i]);
+        }
       } else {
-        varmold[i] = varmnew[i];
-        varsold[i] = varsnew[i];
-        varmnew[i] = varmold[i] + (scalar - varmold[i])/(varrepeat+1);
-        varsnew[i] = varsold[i] + (scalar - varmold[i])*(scalar - varmnew[i]);
+        if (!irepeat) {
+          vector[i] = 0;
+          MNew[i] = scalar;
+        } else {
+          MOld[i] = MNew[i];
+          SOld[i] = vector[i];
+          MNew[i] = MOld[i] + (scalar - MOld[i])/(irepeat+1);
+          vector[i] = SOld[i] + (scalar - MOld[i])*(scalar - MNew[i]);
+        }
       }
     }
     ++i;
@@ -683,14 +679,13 @@ void FixAveTime::invoke_scalar(bigint ntimestep)
   // done if irepeat < nrepeat
   // else reset irepeat and nvalid
 
-  if (variance) ++varrepeat;
-
   irepeat++;
   if (irepeat < nrepeat) {
     nvalid += nevery;
     modify->addstep_compute(nvalid);
     return;
   }
+  nloop++;
 
   irepeat = 0;
   nvalid = ntimestep + nfreq - static_cast<bigint>(nrepeat-1)*nevery;
@@ -698,48 +693,28 @@ void FixAveTime::invoke_scalar(bigint ntimestep)
 
   // average the final result for the Nfreq timestep
 
-  double repeat = nrepeat;
-  for (i = 0; i < nvalues; i++) {
-    if (values[i].offcol == 0) vector[i] /= repeat;
-  }
-
   // if ave = ONE, only single Nfreq timestep value is needed
   // if ave = RUNNING, combine with all previous Nfreq timestep values
   // if ave = WINDOW, combine with nwindow most recent Nfreq timestep values
 
   if (ave == ONE) {
-    for (i = 0; i < nvalues; i++) {
-      vector_total[i] = vector[i];
-      if (variance) variance_total[i] = varsnew[i]/varrepeat;
-    }
-    norm = 1;
+    for (i = 0; i < nvalues; i++) vector_total[i] = vector[i];
+    norm = nrepeat;
 
   } else if (ave == RUNNING) {
-    for (i = 0; i < nvalues; i++) {
-      vector_total[i] += vector[i];
-      if (variance) variance_total[i] = varsnew[i]/varrepeat;
-    }
-    norm++;
+    for (i = 0; i < nvalues; i++) vector_total[i] = vector[i];
+    norm += nrepeat;
 
   } else if (ave == WINDOW) {
-    for (i = 0; i < nvalues; i++) {
-      vector_total[i] += vector[i];
-      if (window_limit) vector_total[i] -= vector_list[iwindow][i];
-      vector_list[iwindow][i] = vector[i];
-      if (variance) {
-          variance_total[i] += varsnew[i];
-          if (window_limit) variance_total[i] -= variance_list[iwindow][i];
-          variance_list[iwindow][i] = varsnew[i];
-      }
-    }
+    for (i = 0; i < nvalues; i++) vector_total[i] = vector[i];
 
     iwindow++;
     if (iwindow == nwindow) {
       iwindow = 0;
       window_limit = 1;
     }
-    if (window_limit) norm = nwindow;
-    else norm = iwindow;
+    if (window_limit) norm = nrepeat*nwindow;
+    else norm = nrepeat*iwindow;
   }
 
   // ensure any columns with offcol set are effectively set to last value
@@ -756,33 +731,32 @@ void FixAveTime::invoke_scalar(bigint ntimestep)
       if (!yaml_header || overwrite) {
         yaml_header = true;
         fputs("keywords: ['Step', ", fp);
-        for (const auto &val : values) utils::print(fp, "'{}', ", val.keyword);
+        for (const auto &val : values) fmt::print(fp, "'{}', ", val.keyword);
         fputs("]\ndata:\n", fp);
       }
-      utils::print(fp, "  - [{}, ", ntimestep);
-      for (i = 0; i < nvalues; i++) utils::print(fp,"{}, ",vector_total[i]/norm);
+      fmt::print(fp, "  - [{}, ", ntimestep);
+      for (i = 0; i < nvalues; i++) fmt::print(fp,"{}, ",vector_total[i]/norm);
       fputs("]\n", fp);
     } else {
-      utils::print(fp,"{}",ntimestep);
+      fmt::print(fp,"{}",ntimestep);
       for (i = 0; i < nvalues; i++) fprintf(fp,format,vector_total[i]/norm);
       fprintf(fp,"\n");
-      if (ferror(fp))
-        error->one(FLERR, Error::NOLASTLINE, "Error writing out time averaged data: {}",
-                   utils::getsyserror());
+      if (ferror(fp)) error->one(FLERR,"Error writing out variance of data");
     }
     fflush(fp);
 
     if (overwrite) {
       bigint fileend = platform::ftell(fp);
       if ((fileend > 0) && (platform::ftruncate(fp,fileend)))
-        error->warning(FLERR, "Error while tuncating output: {}", utils::getsyserror());
+        error->warning(FLERR,"Error while tuncating output: {}", utils::getsyserror());
     }
   }
 }
 
 /* ---------------------------------------------------------------------- */
 
-void FixAveTime::invoke_vector(bigint ntimestep)
+// TODO: CONVERT INVOKE VECTOR TO VARIANCE COMPUTATION
+void FixVarTime::invoke_vector(bigint ntimestep)
 {
   // first sample within single Nfreq epoch
   // zero out arrays that accumulate over many samples, but not across epochs
@@ -808,7 +782,7 @@ void FixAveTime::invoke_vector(bigint ntimestep)
       if (all_variable_length && nrows_new != nrows) {
         nrows = nrows_new;
         memory->destroy(column);
-        memory->create(column,nrows,"ave/time:column");
+        memory->create(column,nrows,"variance/time:column");
         allocate_arrays();
       }
 
@@ -825,15 +799,8 @@ void FixAveTime::invoke_vector(bigint ntimestep)
       if (lockforever_flag) lockforever = 1;
     }
 
-    for (int i = 0; i < nrows; i++) {
-      for (int j = 0; j < nvalues; j++) {
-        array[i][j] = 0.0;
-        if (variance) {
-          varmold_array[i][j] = varmnew_array[i][j] = 0.0;
-          varsold_array[i][j] = varsnew_array[i][j] = 0.0;
-        }
-      }
-    }
+    for (int i = 0; i < nrows; i++)
+      for (int j = 0; j < nvalues; j++) array[i][j] = 0.0;
   }
 
   // accumulate results of computes,fixes,variables to local copy
@@ -887,8 +854,7 @@ void FixAveTime::invoke_vector(bigint ntimestep)
       double *varvec;
       int nvec = input->variable->compute_vector(val.val.v,&varvec);
       if (nvec != nrows)
-        error->all(FLERR, Error::NOLASTLINE, "Fix ave/time vector-style variable {} changed length",
-                   val.id);
+        error->all(FLERR,"Fix variance/time vector-style variable {} changed length", val.id);
       for (int i = 0; i < nrows; i++)
         column[i] = varvec[i];
     }
@@ -901,19 +867,6 @@ void FixAveTime::invoke_vector(bigint ntimestep)
     } else {
       for (int i = 0; i < nrows; i++)
         array[i][j] += column[i];
-    }
-
-    if (variance && !val.offcol) {
-      if (!irepeat) {
-        for (int i = 0; i < nrows; i++) varmnew_array[i][j] = column[i];
-      } else {
-        for (int i = 0; i < nrows; i++) {
-          varmold_array[i][j] = varmnew_array[i][j];
-          varsold_array[i][j] = varsnew_array[i][j];
-          varmnew_array[i][j] = varmold_array[i][j] + (column[i] - varmold_array[i][j])/(irepeat+1);
-          varsnew_array[i][j] = varsold_array[i][j] + (column[i] - varmold_array[i][j])*(column[i] - varmnew_array[i][j]);
-        }
-      }
     }
     ++j;
   }
@@ -947,10 +900,7 @@ void FixAveTime::invoke_vector(bigint ntimestep)
   double repeat = nrepeat;
   for (int i = 0; i < nrows; i++)
     for (int j = 0; j < nvalues; j++)
-      if (values[j].offcol == 0) {
-        array[i][j] /= repeat;
-        if (variance) varsnew_array[i][j] /= repeat;
-      }
+      if (values[j].offcol == 0) array[i][j] /= repeat;
 
   // if ave = ONE, only single Nfreq timestep value is needed
   // if ave = RUNNING, combine with all previous Nfreq timestep values
@@ -958,18 +908,12 @@ void FixAveTime::invoke_vector(bigint ntimestep)
 
   if (ave == ONE) {
     for (int i = 0; i < nrows; i++)
-      for (int j = 0; j < nvalues; j++) {
-        array_total[i][j] = array[i][j];
-        if (variance) variance_array[i][j] = varsnew_array[i][j];
-      }
+      for (int j = 0; j < nvalues; j++) array_total[i][j] = array[i][j];
     norm = 1;
 
   } else if (ave == RUNNING) {
     for (int i = 0; i < nrows; i++)
-      for (int j = 0; j < nvalues; j++) {
-        array_total[i][j] += array[i][j];
-        if (variance) variance_array[i][j] += varsnew_array[i][j];
-      }
+      for (int j = 0; j < nvalues; j++) array_total[i][j] += array[i][j];
     norm++;
 
   } else if (ave == WINDOW) {
@@ -978,11 +922,6 @@ void FixAveTime::invoke_vector(bigint ntimestep)
         array_total[i][j] += array[i][j];
         if (window_limit) array_total[i][j] -= array_list[iwindow][i][j];
         array_list[iwindow][i][j] = array[i][j];
-        if (variance) {
-            variance_array[i][j] += varsnew_array[i][j];
-            if (window_limit) variance_array[i][j] -= variance_array_list[iwindow][i][j];
-            variance_array_list[iwindow][i][j] = varsnew_array[i][j];
-        }
       }
 
     iwindow++;
@@ -1008,23 +947,20 @@ void FixAveTime::invoke_vector(bigint ntimestep)
       if (!yaml_header || overwrite) {
         yaml_header = true;
         fputs("keywords: [", fp);
-        for (const auto &val : values) utils::print(fp, "'{}', ", val.keyword);
+        for (const auto &val : values) fmt::print(fp, "'{}', ", val.keyword);
         fputs("]\ndata:\n", fp);
       }
-      utils::print(fp, "  {}:\n", ntimestep);
+      fmt::print(fp, "  {}:\n", ntimestep);
       for (int i = 0; i < nrows; i++) {
         fputs("  - [", fp);
-        for (int j = 0; j < nvalues; j++) utils::print(fp,"{}, ",array_total[i][j]/norm);
+        for (int j = 0; j < nvalues; j++) fmt::print(fp,"{}, ",array_total[i][j]/norm);
         fputs("]\n", fp);
       }
     } else {
-      utils::print(fp,"{} {}\n",ntimestep,nrows);
+      fmt::print(fp,"{} {}\n",ntimestep,nrows);
       for (int i = 0; i < nrows; i++) {
         fprintf(fp,"%d",i+1);
-        for (int j = 0; j < nvalues; j++) {
-          fprintf(fp,format,array_total[i][j]/norm);
-          if (variance) fprintf(fp,format,variance_array[i][j]);
-        }
+        for (int j = 0; j < nvalues; j++) fprintf(fp,format,array_total[i][j]/norm);
         fprintf(fp,"\n");
       }
     }
@@ -1032,7 +968,7 @@ void FixAveTime::invoke_vector(bigint ntimestep)
     if (overwrite) {
       bigint fileend = platform::ftell(fp);
       if ((fileend > 0) && (platform::ftruncate(fp,fileend)))
-        error->warning(FLERR, "Error while tuncating output: {}", utils::getsyserror());
+        error->warning(FLERR,"Error while tuncating output: {}", utils::getsyserror());
     }
   }
 }
@@ -1041,7 +977,7 @@ void FixAveTime::invoke_vector(bigint ntimestep)
    return scalar value
 ------------------------------------------------------------------------- */
 
-int FixAveTime::column_length(int dynamic)
+int FixVarTime::column_length(int dynamic)
 {
   int length,lengthone;
 
@@ -1063,7 +999,7 @@ int FixAveTime::column_length(int dynamic)
       }
       if (length == 0) length = lengthone;
       else if (lengthone != length)
-        error->all(FLERR, Error::NOLASTLINE, "Fix ave/time columns have inconsistent lengths");
+        error->all(FLERR,"Fix variance/time columns are inconsistent lengths");
     }
   }
 
@@ -1086,10 +1022,10 @@ int FixAveTime::column_length(int dynamic)
       if (all_variable_length) {
         if (length == 0) length = lengthone;
         else if (lengthone != length)
-          error->all(FLERR, Error::NOLASTLINE, "Fix ave/time columns have inconsistent lengths");
+          error->all(FLERR,"Fix variance/time columns are inconsistent lengths");
       } else {
         if (lengthone != nrows)
-          error->all(FLERR, Error::NOLASTLINE, "Fix ave/time columns have inconsistent lengths");
+          error->all(FLERR,"Fix variance/time columns are inconsistent lengths");
       }
     }
   }
@@ -1101,7 +1037,7 @@ int FixAveTime::column_length(int dynamic)
    return scalar value
 ------------------------------------------------------------------------- */
 
-double FixAveTime::compute_scalar()
+double FixVarTime::compute_scalar()
 {
   if (norm) return vector_total[0]/norm;
   return 0.0;
@@ -1111,7 +1047,7 @@ double FixAveTime::compute_scalar()
    return Ith vector value
 ------------------------------------------------------------------------- */
 
-double FixAveTime::compute_vector(int i)
+double FixVarTime::compute_vector(int i)
 {
   if (i >= nrows) return 0.0;
   if (norm) {
@@ -1125,34 +1061,18 @@ double FixAveTime::compute_vector(int i)
    return I,J array value
 ------------------------------------------------------------------------- */
 
-double FixAveTime::compute_array(int i, int j)
+double FixVarTime::compute_array(int i, int j)
 {
   if (i >= nrows) return 0.0;
   if (norm) return array_total[i][j]/norm;
   return 0.0;
 }
 
-void FixAveTime::update_variance_scalar(int i, double scalar)
-{
-  // TODO: Make the RUNNING style. Watch out for the varlen in vector case?
-  if (ave == RUNNING) {
-      continue
-  } else {
-    if (varrepeat==0) {
-      varmnew[i] = scalar;
-    } else {
-      varmold[i] = varmnew[i];
-      varsold[i] = varsnew[i];
-      varmnew[i] = varmold[i] + (scalar - varmold[i])/(varrepeat+1);
-      varsnew[i] = varsold[i] + (scalar - varmold[i])*(scalar - varmnew[i]);
-    }
-  }
-}
 /* ----------------------------------------------------------------------
    modify settings
 ------------------------------------------------------------------------- */
 
-int FixAveTime::modify_param(int narg, char **arg)
+int FixVarTime::modify_param(int narg, char **arg)
 {
   if (strcmp(arg[0], "colname") == 0) {
     if (narg < 3) utils::missing_cmd_args(FLERR, "fix_modify colname", error);
@@ -1169,7 +1089,7 @@ int FixAveTime::modify_param(int narg, char **arg)
       }
     }
     if ((icol < 0) || (icol >= (int) values.size()))
-      error->all(FLERR, 1 + 1, "Thermo_modify colname column {} invalid", arg[1]);
+      error->all(FLERR, "Thermo_modify colname column {} invalid", arg[1]);
     values[icol].keyword = arg[2];
     return 3;
   }
@@ -1180,7 +1100,7 @@ int FixAveTime::modify_param(int narg, char **arg)
    parse optional args
 ------------------------------------------------------------------------- */
 
-void FixAveTime::options(int iarg, int narg, char **arg)
+void FixVarTime::options(int iarg, int narg, char **arg)
 {
   // option defaults
 
@@ -1192,84 +1112,81 @@ void FixAveTime::options(int iarg, int narg, char **arg)
   offlist = nullptr;
   overwrite = 0;
   yaml_flag = yaml_header = false;
-  format = utils::strdup(" %g");
+  format_user = nullptr;
+  format = (char *) " %g";
   title1 = nullptr;
   title2 = nullptr;
   title3 = nullptr;
-  variance = false;
 
   // optional args
 
   while (iarg < narg) {
     if ((strcmp(arg[iarg],"file") == 0) || (strcmp(arg[iarg],"append") == 0)) {
       if (iarg+2 > narg)
-        utils::missing_cmd_args(FLERR, std::string("fix ave/time ")+arg[iarg], error);
+        utils::missing_cmd_args(FLERR, std::string("fix variance/time ")+arg[iarg], error);
       yaml_flag = utils::strmatch(arg[iarg+1],"\\.[yY][aA]?[mM][lL]$");
       if (comm->me == 0) {
         if (strcmp(arg[iarg],"file") == 0) fp = fopen(arg[iarg+1],"w");
         else fp = fopen(arg[iarg+1],"a");
         if (fp == nullptr)
-          error->one(FLERR, iarg+1, "Cannot open fix ave/time file {}: {}",
+          error->one(FLERR,"Cannot open fix variance/time file {}: {}",
                      arg[iarg+1], utils::getsyserror());
       }
       iarg += 2;
     } else if (strcmp(arg[iarg],"ave") == 0) {
-      if (iarg+2 > narg) utils::missing_cmd_args(FLERR, "fix ave/time ave", error);
+      if (iarg+2 > narg) utils::missing_cmd_args(FLERR, "fix variance/time ave", error);
       if (strcmp(arg[iarg+1],"one") == 0) ave = ONE;
       else if (strcmp(arg[iarg+1],"running") == 0) ave = RUNNING;
       else if (strcmp(arg[iarg+1],"window") == 0) ave = WINDOW;
-      else error->all(FLERR, iarg+1, "Unknown fix ave/time ave keyword {}", arg[iarg+1]);
+      else error->all(FLERR,"Unknown fix variance/time ave keyword {}", arg[iarg+1]);
       if (ave == WINDOW) {
-        if (iarg+3 > narg) utils::missing_cmd_args(FLERR, "fix ave/time ave window", error);
+        if (iarg+3 > narg) utils::missing_cmd_args(FLERR, "fix variance/time ave window", error);
         nwindow = utils::inumeric(FLERR,arg[iarg+2],false,lmp);
         if (nwindow <= 0)
-          error->all(FLERR, iarg+2, "Illegal fix ave/time ave window argument {}; must be > 0",
-                     nwindow);
+          error->all(FLERR,"Illegal fix variance/time ave window argument {}; must be > 0", nwindow);
       }
       iarg += 2;
       if (ave == WINDOW) iarg++;
     } else if (strcmp(arg[iarg],"start") == 0) {
-      if (iarg+2 > narg) utils::missing_cmd_args(FLERR, "fix ave/time start", error);
+      if (iarg+2 > narg) utils::missing_cmd_args(FLERR, "fix variance/time start", error);
       startstep = utils::inumeric(FLERR,arg[iarg+1],false,lmp);
       iarg += 2;
     } else if (strcmp(arg[iarg],"mode") == 0) {
-      if (iarg+2 > narg) utils::missing_cmd_args(FLERR, "fix ave/time mode", error);
+      if (iarg+2 > narg) utils::missing_cmd_args(FLERR, "fix variance/time mode", error);
       if (strcmp(arg[iarg+1],"scalar") == 0) mode = SCALAR;
       else if (strcmp(arg[iarg+1],"vector") == 0) mode = VECTOR;
-      else error->all(FLERR,iarg+1,"Unknown fix ave/time mode {}", arg[iarg+1]);
+      else error->all(FLERR,"Unknown fix variance/time mode {}", arg[iarg+1]);
       iarg += 2;
     } else if (strcmp(arg[iarg],"off") == 0) {
-      if (iarg+2 > narg) utils::missing_cmd_args(FLERR, "fix ave/time off", error);
-      memory->grow(offlist,noff+1,"ave/time:offlist");
+      if (iarg+2 > narg) utils::missing_cmd_args(FLERR, "fix variance/time off", error);
+      memory->grow(offlist,noff+1,"variance/time:offlist");
       offlist[noff++] = utils::inumeric(FLERR,arg[iarg+1],false,lmp);
       iarg += 2;
     } else if (strcmp(arg[iarg],"overwrite") == 0) {
       overwrite = 1;
       iarg += 1;
     } else if (strcmp(arg[iarg],"format") == 0) {
-      if (iarg+2 > narg) utils::missing_cmd_args(FLERR, "fix ave/time format", error);
-      delete[] format;
-      format = utils::strdup(arg[iarg+1]);
+      if (iarg+2 > narg) utils::missing_cmd_args(FLERR, "fix variance/time format", error);
+      delete[] format_user;
+      format_user = utils::strdup(arg[iarg+1]);
+      format = format_user;
       iarg += 2;
     } else if (strcmp(arg[iarg],"title1") == 0) {
-      if (iarg+2 > narg) utils::missing_cmd_args(FLERR, "fix ave/time title1", error);
+      if (iarg+2 > narg) utils::missing_cmd_args(FLERR, "fix variance/time title1", error);
       delete[] title1;
       title1 = utils::strdup(arg[iarg+1]);
       iarg += 2;
     } else if (strcmp(arg[iarg],"title2") == 0) {
-      if (iarg+2 > narg) utils::missing_cmd_args(FLERR, "fix ave/time title2", error);
+      if (iarg+2 > narg) utils::missing_cmd_args(FLERR, "fix variance/time title2", error);
       delete[] title2;
       title2 = utils::strdup(arg[iarg+1]);
       iarg += 2;
     } else if (strcmp(arg[iarg],"title3") == 0) {
-      if (iarg+2 > narg) utils::missing_cmd_args(FLERR, "fix ave/time title3", error);
+      if (iarg+2 > narg) utils::missing_cmd_args(FLERR, "fix variance/time title3", error);
       delete[] title3;
       title3 = utils::strdup(arg[iarg+1]);
       iarg += 2;
-    } else if (strcmp(arg[iarg],"var") == 0) {
-        variance = true;
-        iarg += 1;
-    } else error->all(FLERR,"Unknown fix ave/time keyword {}", arg[iarg]);
+    } else error->all(FLERR,"Unknown fix variance/time keyword {}", arg[iarg]);
   }
 }
 
@@ -1277,46 +1194,21 @@ void FixAveTime::options(int iarg, int narg, char **arg)
    reallocate arrays for mode = VECTOR of size Nrows x Nvalues
 ------------------------------------------------------------------------- */
 
-void FixAveTime::allocate_arrays()
+void FixVarTime::allocate_arrays()
 {
   memory->destroy(array);
   memory->destroy(array_total);
-  memory->create(array,nrows,nvalues,"ave/time:array");
-  memory->create(array_total,nrows,nvalues,"ave/time:array_total");
-  if (variance) {
-      memory->destroy(varmold_array);
-      memory->destroy(varmnew_array);
-      memory->destroy(varsold_array);
-      memory->destroy(varsnew_array);
-      memory->destroy(variance_array);
-      memory->create(varmold_array,nrows,nvalues,"ave/time:varmold_array");
-      memory->create(varmnew_array,nrows,nvalues,"ave/time:varmnew_array");
-      memory->create(varsold_array,nrows,nvalues,"ave/time:varsold_array");
-      memory->create(varsnew_array,nrows,nvalues,"ave/time:varsnew_array");
-      memory->create(variance_array,nrows,nvalues,"ave/time:variance_array");
-  }
+  memory->create(array,nrows,nvalues,"variance/time:array");
+  memory->create(array_total,nrows,nvalues,"variance/time:array_total");
   if (ave == WINDOW) {
     memory->destroy(array_list);
-    memory->create(array_list,nwindow,nrows,nvalues,"ave/time:array_list");
-    if (variance) {
-      memory->destroy(variance_array_list);
-      memory->create(variance_array_list,nwindow,nrows,nvalues,"ave/time:variance_array_list");
-    }
+    memory->create(array_list,nwindow,nrows,nvalues,"variance/time:array_list");
   }
 
   // reinitialize regrown array_total since it accumulates
 
   for (int i = 0; i < nrows; i++)
-    for (int j = 0; j < nvalues; j++) {
-      array_total[i][j] = 0.0;
-      if (variance) {
-        varmold_array[i][j] = 0.0;
-        varmnew_array[i][j] = 0.0;
-        varsold_array[i][j] = 0.0;
-        varsnew_array[i][j] = 0.0;
-        variance_array[i][j] = 0.0;
-      }
-    }
+    for (int j = 0; j < nvalues; j++) array_total[i][j] = 0.0;
 }
 
 /* ----------------------------------------------------------------------
@@ -1326,7 +1218,7 @@ void FixAveTime::allocate_arrays()
    startstep is lower bound on nfreq multiple
 ------------------------------------------------------------------------- */
 
-bigint FixAveTime::nextvalid()
+bigint FixVarTime::nextvalid()
 {
   bigint nvalid = (update->ntimestep/nfreq)*nfreq + nfreq;
   while (nvalid < startstep) nvalid += nfreq;

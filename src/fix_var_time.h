@@ -13,12 +13,12 @@
 
 #ifdef FIX_CLASS
 // clang-format off
-FixStyle(ave/time,FixAveTime);
+FixStyle(var/time,FixVarTime);
 // clang-format on
 #else
 
-#ifndef LMP_FIX_AVE_TIME_H
-#define LMP_FIX_AVE_TIME_H
+#ifndef LMP_FIX_VAR_TIME_H
+#define LMP_FIX_VAR_TIME_H
 
 #include "fix.h"
 
@@ -26,10 +26,10 @@ FixStyle(ave/time,FixAveTime);
 
 namespace LAMMPS_NS {
 
-class FixAveTime : public Fix {
+class FixVarTime : public Fix {
  public:
-  FixAveTime(class LAMMPS *, int, char **);
-  ~FixAveTime() override;
+  FixVarTime(class LAMMPS *, int, char **);
+  ~FixVarTime() override;
   int setmask() override;
   void init() override;
   void setup(int) override;
@@ -43,7 +43,6 @@ class FixAveTime : public Fix {
   struct value_t {
     int which;       // type of data: COMPUTE, FIX, VARIABLE
     int argindex;    // 1-based index if data is vector, else 0
-    int iarg;        // argument index in original argument list
     int varlen;      // 1 if value is from variable-length compute
     int offcol;
     std::string id;         // compute/fix/variable ID
@@ -65,36 +64,29 @@ class FixAveTime : public Fix {
   int all_variable_length;
   int lockforever;
   bool yaml_flag, yaml_header;
-  bool variance;
 
   int ave, nwindow, startstep, mode;
   int noff, overwrite;
   int *offlist;
-  char *format;
+  char *format, *format_user;
   char *title1, *title2, *title3;
   bigint filepos;
 
   std::map<std::string, int> key2col;
 
+  int nloop;
   int norm, iwindow, window_limit;
   double *vector;
+  double *MOld, *MNew, *SOld;
   double *vector_total;
   double **vector_list;
+  double **values_array;
   double *column;
   double **array;
   double **array_total;
+  double **MOld_array, **MNew_array, **SOld_array;
   double ***array_list;
-
-  // Variance vectors, arrays and methods
-  int varrepeat;
-  double *varmold, *varmnew, *varsold, *varsnew;
-  double *variance_total;
-  double **variance_list;
-  double **variance_array;
-  double **varmold_array, **varmnew_array;
-  double **varsold_array, **varsnew_array;
-  double ***variance_array_list;
-  void update_variance_scalar(int, double);
+  double ***values_vectors_array;
 
   int column_length(int);
   void invoke_scalar(bigint);

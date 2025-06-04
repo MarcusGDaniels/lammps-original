@@ -123,6 +123,7 @@ FixSRD::FixSRD(LAMMPS *lmp, int narg, char **arg) :
   shiftuser = SHIFT_NO;
   shiftseed = 0;
   tstat = 0;
+  putflag = 0;
   rescale_rotate = rescale_collide = 1;
 
   int iarg = 8;
@@ -199,6 +200,10 @@ FixSRD::FixSRD(LAMMPS *lmp, int narg, char **arg) :
       if (iarg + 2 > narg) error->all(FLERR, "Illegal fix srd command");
       tstat = utils::logical(FLERR, arg[iarg + 1], false, lmp);
       iarg += 2;
+    } else if (strcmp(arg[iarg], "unbiased") == 0) {
+      if (iarg + 2 > narg) error->all(FLERR, "Illegal fix srd command: stream");
+      putflag = utils::logical(FLERR, arg[iarg + 1], false, lmp);
+      iarg += 2;
     } else if (strcmp(arg[iarg], "rescale") == 0) {
       if (iarg + 2 > narg) error->all(FLERR, "Illegal fix srd command");
       if (strcmp(arg[iarg + 1], "no") == 0)
@@ -232,6 +237,7 @@ FixSRD::FixSRD(LAMMPS *lmp, int narg, char **arg) :
   if (cubictol < 0.0 || cubictol > 1.0) error->all(FLERR, "Illegal fix srd command");
   if ((shiftuser == SHIFT_YES || shiftuser == SHIFT_POSSIBLE) && shiftseed <= 0)
     error->all(FLERR, "Illegal fix srd command");
+  if (putflag && !tstat) error->all(FLERR, "PUT requires tstat");
 
   // initialize Marsaglia RNG with processor-unique seed
 
@@ -830,6 +836,8 @@ void FixSRD::reset_velocities()
   double vsq, tbin, scale;
   double *vave, *xlamda;
   double vstream[3];
+  double *h_rate = domain->h_rate;
+  double *h_ratelo = domain->h_ratelo;
 
   // if requested, perform a dynamic shift of bin positions
 
@@ -880,6 +888,22 @@ void FixSRD::reset_velocities()
       iz = static_cast<int>((x[i][2] - corner[2]) * bininv1z);
       iz = MAX(iz, binlo[2]);
       iz = MIN(iz, binhi[2]);
+
+      if (deformflag) {
+        // shift velocities in last bins
+        if (domain->xperiodic && ix == nbin1x) {
+          v[i][0] -= h_rate[0];
+        }
+        if (domain->yperiodic && iy == nbin1y) {
+          v[i][0] -= h_rate[5];
+          v[i][1] -= h_rate[1];
+        }
+        if (domain->zperiodic && iz == nbin1z) {
+          v[i][0] -= h_rate[4];
+          v[i][1] -= h_rate[3];
+          v[i][2] -= h_rate[2];
+        }
+      }
 
       ibin = (iz - binlo[2]) * nbiny * nbinx + (iy - binlo[1]) * nbinx + (ix - binlo[0]);
       binnext[i] = binhead[ibin];
@@ -936,7 +960,7 @@ void FixSRD::reset_velocities()
   int dof_temp = 1;
   int dof_tstat;
   if (tstat) {
-    if (deformflag)
+    if (deformflag && !putflag)
       dof_tstat = dof_temp = 0;
     else
       dof_tstat = 1;
@@ -946,8 +970,6 @@ void FixSRD::reset_velocities()
   srd_bin_count = 0;
 
   if (dimension == 2) axis = 2;
-  double *h_rate = domain->h_rate;
-  double *h_ratelo = domain->h_ratelo;
 
   for (i = 0; i < nbins; i++) {
     vbin[i].value[0] = 0.0;
@@ -997,7 +1019,7 @@ void FixSRD::reset_velocities()
 
       vave = vbin[i].vsum;
 
-      if (deformflag) {
+      if (deformflag && !putflag) {
         xlamda = vbin[i].xctr;
         vstream[0] =
             h_rate[0] * xlamda[0] + h_rate[5] * xlamda[1] + h_rate[4] * xlamda[2] + h_ratelo[0];
@@ -1052,6 +1074,38 @@ void FixSRD::reset_velocities()
           MathExtra::scale3(vmax / sqrt(vsq), v[i]);
         }
       }
+  }
+
+  // undo velocity remap (only if using PUT or tstat no)
+  if (deformflag && (putflag || !tstat)) {
+    domain->x2lamda(nlocal);
+    for (i = 0; i < nlocal; i++) {
+      if (mask[i] & groupbit) {
+        ix = static_cast<int>((x[i][0] - corner[0]) * bininv1x);
+        ix = MAX(ix, binlo[0]);
+        ix = MIN(ix, binhi[0]);
+        iy = static_cast<int>((x[i][1] - corner[1]) * bininv1y);
+        iy = MAX(iy, binlo[1]);
+        iy = MIN(iy, binhi[1]);
+        iz = static_cast<int>((x[i][2] - corner[2]) * bininv1z);
+        iz = MAX(iz, binlo[2]);
+        iz = MIN(iz, binhi[2]);
+
+        if (domain->xperiodic && ix == nbin1x) {
+          v[i][0] += h_rate[0];
+        }
+        if (domain->yperiodic && iy == nbin1y) {
+          v[i][0] += h_rate[5];
+          v[i][1] += h_rate[1];
+        }
+        if (domain->zperiodic && iz == nbin1z) {
+          v[i][0] += h_rate[4];
+          v[i][1] += h_rate[3];
+          v[i][2] += h_rate[2];
+        }
+      }
+    }
+    domain->lamda2x(nlocal);
   }
 }
 
@@ -2774,6 +2828,7 @@ void FixSRD::parameterize()
     mesg += fmt::format("  SRD per actual grid cell = {:.8}\n", srd_per_cell);
     mesg += fmt::format("  SRD viscosity = {:.8}\n", viscosity);
     mesg += fmt::format("  big/SRD mass density ratio = {:.8}\n", mdratio);
+    mesg += fmt::format("  unbiased profile = {}\n", putflag);
     utils::logmesg(lmp, mesg);
   }
 

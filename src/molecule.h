@@ -130,8 +130,9 @@ class Molecule : protected Pointers {
   void compute_inertia();
   int findfragment(const char *);
   void check_attributes();
+  void scan(char **);
 
- private:
+ protected:
   int me;
   FILE *fp;
   int *count;
@@ -139,7 +140,7 @@ class Molecule : protected Pointers {
   int autospecial;
   double sizescale;
 
-  void read(int);
+  virtual void read(int);
   void coords(char *);
   void types(char *);
   void molecules(char *);
@@ -149,9 +150,13 @@ class Molecule : protected Pointers {
   void dipoles(char *);
   void masses(char *);
   void bonds(int, char *);
-  void angles(int, char *);
+  void store_bond(int, std::string, tagint, tagint);
+  void angles(int, char *, int);
+  void store_angle(int, std::string, tagint, tagint, tagint);
   void dihedrals(int, char *);
+  void store_dihedral(int, std::string, tagint, tagint, tagint, tagint);
   void impropers(int, char *);
+  void store_improper(int, std::string, tagint, tagint, tagint, tagint);
   void nspecial_read(int, char *);
   void special_read(char *);
   void special_generate();
@@ -167,10 +172,8 @@ class Molecule : protected Pointers {
   void readline(char *);
   std::string parse_keyword(int, char *);
   void skip_lines(int, char *, const std::string &);
-
-  // void print();
 };
 
-}    // namespace LAMMPS_NS
+}
 
 #endif

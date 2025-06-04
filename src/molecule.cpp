@@ -141,23 +141,42 @@ Molecule::Molecule(LAMMPS *lmp, int narg, char **arg, int &index) :
   // initialize all fields to empty
 
   Molecule::initialize();
+}
 
+/* ---------------------------------------------------------------------- */
+
+Molecule::~Molecule()
+{
+  delete[] id;
+  deallocate();
+}
+
+/* ----------------------------------------------------------------------
+  scan molecule info from file
+------------------------------------------------------------------------- */
+
+void Molecule::scan(char **arg)
+{
   // scan file for sizes of all fields and allocate storage for them
 
   if (me == 0) {
     fp = fopen(arg[fileiarg], "r");
     if (fp == nullptr)
       error->one(FLERR, fileiarg, "Cannot open molecule file {}: {}", arg[fileiarg],
-                 utils::getsyserror());
+                utils::getsyserror());
   }
-  Molecule::read(0);
+
+  this->read(0);
+
   if (me == 0) fclose(fp);
   Molecule::allocate();
 
   // read file again to populate all fields
 
   if (me == 0) fp = fopen(arg[fileiarg], "r");
-  Molecule::read(1);
+
+  this->read(1);
+
   if (me == 0) fclose(fp);
 
   // stats
@@ -175,14 +194,6 @@ Molecule::Molecule(LAMMPS *lmp, int narg, char **arg, int &index) :
                    "  {} impropers with max type {}\n",
                    id, title, nmolecules, nfragments, natoms, ntypes, nbonds, nbondtypes, nangles,
                    nangletypes, ndihedrals, ndihedraltypes, nimpropers, nimpropertypes);
-}
-
-/* ---------------------------------------------------------------------- */
-
-Molecule::~Molecule()
-{
-  delete[] id;
-  deallocate();
 }
 
 /* ----------------------------------------------------------------------
@@ -607,7 +618,7 @@ void Molecule::read(int flag)
       if (nangles == 0)
         error->all(FLERR, fileiarg, "Found Angles section but no nangles setting in header");
       angleflag = tag_require = 1;
-      angles(flag, line);
+      angles(flag, line, 0);
     } else if (keyword == "Dihedrals") {
       if (ndihedrals == 0)
         error->all(FLERR, fileiarg, "Found Dihedrals section but no ndihedrals setting in header");
@@ -1043,9 +1054,63 @@ void Molecule::masses(char *line)
 }
 
 /* ----------------------------------------------------------------------
+  store each with both atoms if newton_bond = 0
+  if flag = 0, just update count bonds/atom
+  if flag = 1, store bond with atoms
+------------------------------------------------------------------------- */
+
+void Molecule::store_bond(int flag, std::string typestr, tagint atom1, tagint atom2)
+{
+  const std::string location = "Bonds section of molecule file";
+  int itype;
+  tagint m;
+  int newton_bond = force->newton_bond;
+
+  switch (utils::is_type(typestr)) {
+    case 0: {    // numeric
+      itype = utils::inumeric(FLERR, typestr, false, lmp);
+      itype += boffset;
+      break;
+    }
+    case 1: {    // type label
+      if (!atom->labelmapflag)
+        error->all(FLERR, fileiarg, "Invalid bond type {} in {}", typestr, location);
+      itype = atom->lmap->find(typestr, Atom::BOND);
+      if (itype == -1)
+        error->all(FLERR, fileiarg, "Unknown bond type {} in {}", typestr, location);
+      break;
+    }
+    default:    // invalid
+      error->one(FLERR, fileiarg, "Invalid format in {}", location);
+      break;
+  }
+
+  if ((atom1 <= 0) || (atom1 > natoms) || (atom2 <= 0) || (atom2 > natoms) || (atom1 == atom2))
+    error->all(FLERR, fileiarg, "Invalid atom ID in {}", location);
+  if ((itype <= 0) || (domain->box_exist && (itype > atom->nbondtypes)))
+    error->all(FLERR, fileiarg, "Invalid bond type in {}", location);
+
+  if (flag) {
+    m = atom1 - 1;
+    nbondtypes = MAX(nbondtypes, itype);
+    bond_type[m][num_bond[m]] = itype;
+    bond_atom[m][num_bond[m]] = atom2;
+    num_bond[m]++;
+    if (newton_bond == 0) {
+      m = atom2 - 1;
+      bond_type[m][num_bond[m]] = itype;
+      bond_atom[m][num_bond[m]] = atom1;
+      num_bond[m]++;
+    }
+  } else {
+    count[atom1 - 1]++;
+    if (newton_bond == 0) count[atom2 - 1]++;
+  }
+}
+
+/* ----------------------------------------------------------------------
    read bonds from file
    set nbondtypes = max type of any bond
-   store each with both atoms if newton_bond = 0
    if flag = 0, just count bonds/atom
    if flag = 1, store them with atoms
 ------------------------------------------------------------------------- */
@@ -1053,10 +1118,8 @@ void Molecule::masses(char *line)
 void Molecule::bonds(int flag, char *line)
 {
   const std::string location = "Bonds section of molecule file";
-  int itype;
-  tagint m, atom1, atom2;
+  tagint atom1, atom2;
   std::string typestr;
-  int newton_bond = force->newton_bond;
 
   if (flag == 0)
     for (int i = 0; i < natoms; i++) count[i] = 0;
@@ -1076,49 +1139,11 @@ void Molecule::bonds(int flag, char *line)
     if (nwords != 4) error->all(FLERR, fileiarg, "Invalid format in {}: {}", location, utils::trim(line));
 
     typestr = utils::utf8_subst(values[1]);
-    switch (utils::is_type(typestr)) {
-      case 0: {    // numeric
-        itype = utils::inumeric(FLERR, typestr, false, lmp);
-        itype += boffset;
-        break;
-      }
-      case 1: {    // type label
-        if (!atom->labelmapflag)
-          error->all(FLERR, fileiarg, "Invalid bond type {} in {}: {}", typestr, location, utils::trim(line));
-        itype = atom->lmap->find(typestr, Atom::BOND);
-        if (itype == -1)
-          error->all(FLERR, fileiarg, "Unknown bond type {} in {}: {}", typestr, location, utils::trim(line));
-        break;
-      }
-      default:    // invalid
-        error->one(FLERR, fileiarg, "Invalid format in {}: {}", location, utils::trim(line));
-        break;
-    }
 
     atom1 = utils::tnumeric(FLERR, values[2], false, lmp);
     atom2 = utils::tnumeric(FLERR, values[3], false, lmp);
 
-    if ((atom1 <= 0) || (atom1 > natoms) || (atom2 <= 0) || (atom2 > natoms) || (atom1 == atom2))
-      error->all(FLERR, fileiarg, "Invalid atom ID in {}: {}", location, utils::trim(line));
-    if ((itype <= 0) || (domain->box_exist && (itype > atom->nbondtypes)))
-      error->all(FLERR, fileiarg, "Invalid bond type in {}: {}", location, utils::trim(line));
-
-    if (flag) {
-      m = atom1 - 1;
-      nbondtypes = MAX(nbondtypes, itype);
-      bond_type[m][num_bond[m]] = itype;
-      bond_atom[m][num_bond[m]] = atom2;
-      num_bond[m]++;
-      if (newton_bond == 0) {
-        m = atom2 - 1;
-        bond_type[m][num_bond[m]] = itype;
-        bond_atom[m][num_bond[m]] = atom1;
-        num_bond[m]++;
-      }
-    } else {
-      count[atom1 - 1]++;
-      if (newton_bond == 0) count[atom2 - 1]++;
-    }
+    store_bond(flag, typestr, atom1, atom2);
   }
 
   // bond_per_atom = max of count vector
@@ -1130,19 +1155,85 @@ void Molecule::bonds(int flag, char *line)
 }
 
 /* ----------------------------------------------------------------------
+   store each with all 4 atoms if newton_bond = 0
+   if flag = 0, just update count dihedrals/atom
+   if flag = 1, store them with atoms
+------------------------------------------------------------------------- */
+
+void Molecule::store_angle(int flag, std::string typestr, tagint atom1, tagint atom2, tagint atom3)
+{
+  const std::string location = "Angles section of molecule file";
+  int itype;
+  tagint m;
+  int newton_bond = force->newton_bond;
+
+  switch (utils::is_type(typestr)) {
+    case 0: {    // numeric
+      itype = utils::inumeric(FLERR, typestr, false, lmp);
+      itype += aoffset;
+      break;
+    }
+    case 1: {    // type label
+      if (!atom->labelmapflag)
+        error->all(FLERR, fileiarg, "Invalid angle type {} in {}", typestr, location);
+      itype = atom->lmap->find(typestr, Atom::ANGLE);
+      if (itype == -1)
+        error->all(FLERR, fileiarg, "Unknown angle type {} in {}", typestr, location);
+      break;
+    }
+    default:    // invalid
+      error->one(FLERR, fileiarg, "Invalid format in {}", location);
+      break;
+  }
+
+  if ((atom1 <= 0) || (atom1 > natoms) || (atom2 <= 0) || (atom2 > natoms) || (atom3 <= 0) ||
+      (atom3 > natoms) || (atom1 == atom2) || (atom1 == atom3) || (atom2 == atom3))
+    error->all(FLERR, fileiarg, "Invalid atom ID in {}", location);
+  if ((itype <= 0) || (domain->box_exist && (itype > atom->nangletypes)))
+    error->all(FLERR, fileiarg, "Invalid angle type in {}", location);
+
+  if (flag) {
+    m = atom2 - 1;
+    nangletypes = MAX(nangletypes, itype);
+    angle_type[m][num_angle[m]] = itype;
+    angle_atom1[m][num_angle[m]] = atom1;
+    angle_atom2[m][num_angle[m]] = atom2;
+    angle_atom3[m][num_angle[m]] = atom3;
+    num_angle[m]++;
+    if (newton_bond == 0) {
+      m = atom1 - 1;
+      angle_type[m][num_angle[m]] = itype;
+      angle_atom1[m][num_angle[m]] = atom1;
+      angle_atom2[m][num_angle[m]] = atom2;
+      angle_atom3[m][num_angle[m]] = atom3;
+      num_angle[m]++;
+      m = atom3 - 1;
+      angle_type[m][num_angle[m]] = itype;
+      angle_atom1[m][num_angle[m]] = atom1;
+      angle_atom2[m][num_angle[m]] = atom2;
+      angle_atom3[m][num_angle[m]] = atom3;
+      num_angle[m]++;
+    }
+  } else {
+    count[atom2 - 1]++;
+    if (newton_bond == 0) {
+      count[atom1 - 1]++;
+      count[atom3 - 1]++;
+    }
+  }
+}
+
+/* ----------------------------------------------------------------------
    read angles from file
-   store each with all 3 atoms if newton_bond = 0
    if flag = 0, just count angles/atom
    if flag = 1, store them with atoms
 ------------------------------------------------------------------------- */
 
-void Molecule::angles(int flag, char *line)
+void Molecule::angles(int flag, char *line, int file_t)
 {
   const std::string location = "Angles section of molecule file";
-  int itype;
-  tagint m, atom1, atom2, atom3;
+  tagint atom1, atom2, atom3;
   std::string typestr;
-  int newton_bond = force->newton_bond;
 
   if (flag == 0)
     for (int i = 0; i < natoms; i++) count[i] = 0;
@@ -1162,64 +1253,12 @@ void Molecule::angles(int flag, char *line)
     if (nwords != 5) error->all(FLERR, fileiarg, "Invalid format in {}: {}", location, utils::trim(line));
 
     typestr = utils::utf8_subst(values[1]);
-    switch (utils::is_type(typestr)) {
-      case 0: {    // numeric
-        itype = utils::inumeric(FLERR, typestr, false, lmp);
-        itype += aoffset;
-        break;
-      }
-      case 1: {    // type label
-        if (!atom->labelmapflag)
-          error->all(FLERR, fileiarg, "Invalid angle type {} in {}: {}", typestr, location, utils::trim(line));
-        itype = atom->lmap->find(typestr, Atom::ANGLE);
-        if (itype == -1)
-          error->all(FLERR, fileiarg, "Unknown angle type {} in {}: {}", typestr, location, utils::trim(line));
-        break;
-      }
-      default:    // invalid
-        error->one(FLERR, fileiarg, "Invalid format in {}: {}", location, utils::trim(line));
-        break;
-    }
 
     atom1 = utils::tnumeric(FLERR, values[2], false, lmp);
     atom2 = utils::tnumeric(FLERR, values[3], false, lmp);
     atom3 = utils::tnumeric(FLERR, values[4], false, lmp);
 
-    if ((atom1 <= 0) || (atom1 > natoms) || (atom2 <= 0) || (atom2 > natoms) || (atom3 <= 0) ||
-        (atom3 > natoms) || (atom1 == atom2) || (atom1 == atom3) || (atom2 == atom3))
-      error->all(FLERR, fileiarg, "Invalid atom ID in {}: {}", location, utils::trim(line));
-    if ((itype <= 0) || (domain->box_exist && (itype > atom->nangletypes)))
-      error->all(FLERR, fileiarg, "Invalid angle type in {}: {}", location, utils::trim(line));
-
-    if (flag) {
-      m = atom2 - 1;
-      nangletypes = MAX(nangletypes, itype);
-      angle_type[m][num_angle[m]] = itype;
-      angle_atom1[m][num_angle[m]] = atom1;
-      angle_atom2[m][num_angle[m]] = atom2;
-      angle_atom3[m][num_angle[m]] = atom3;
-      num_angle[m]++;
-      if (newton_bond == 0) {
-        m = atom1 - 1;
-        angle_type[m][num_angle[m]] = itype;
-        angle_atom1[m][num_angle[m]] = atom1;
-        angle_atom2[m][num_angle[m]] = atom2;
-        angle_atom3[m][num_angle[m]] = atom3;
-        num_angle[m]++;
-        m = atom3 - 1;
-        angle_type[m][num_angle[m]] = itype;
-        angle_atom1[m][num_angle[m]] = atom1;
-        angle_atom2[m][num_angle[m]] = atom2;
-        angle_atom3[m][num_angle[m]] = atom3;
-        num_angle[m]++;
-      }
-    } else {
-      count[atom2 - 1]++;
-      if (newton_bond == 0) {
-        count[atom1 - 1]++;
-        count[atom3 - 1]++;
-      }
-    }
+    store_angle(flag, typestr, atom1, atom2, atom3);
   }
 
   // angle_per_atom = max of count vector
@@ -1231,8 +1270,89 @@ void Molecule::angles(int flag, char *line)
 }
 
 /* ----------------------------------------------------------------------
-   read dihedrals from file
    store each with all 4 atoms if newton_bond = 0
+   if flag = 0, just update count dihedrals/atom
+   if flag = 1, store them with atoms
+------------------------------------------------------------------------- */
+
+void Molecule::store_dihedral(int flag, std::string typestr, tagint atom1, tagint atom2, tagint atom3, tagint atom4)
+{
+  const std::string location = "Dihedrals section of molecule file";
+  int itype;
+  tagint m;
+  int newton_bond = force->newton_bond;
+
+  switch (utils::is_type(typestr)) {
+    case 0: {    // numeric
+      itype = utils::inumeric(FLERR, typestr, false, lmp);
+      itype += doffset;
+      break;
+    }
+    case 1: {    // type label
+      if (!atom->labelmapflag)
+        error->all(FLERR, fileiarg, "Invalid dihedral type {} in {}", typestr, location);
+      itype = atom->lmap->find(typestr, Atom::DIHEDRAL);
+      if (itype == -1)
+        error->all(FLERR, fileiarg, "Unknown dihedral type {} in {}", typestr, location);
+      break;
+    }
+    default:    // invalid
+      error->one(FLERR, fileiarg, "Invalid format in {}", location);
+      break;
+  }
+
+  if ((atom1 <= 0) || (atom1 > natoms) || (atom2 <= 0) || (atom2 > natoms) || (atom3 <= 0) ||
+      (atom3 > natoms) || (atom4 <= 0) || (atom4 > natoms) || (atom1 == atom2) ||
+      (atom1 == atom3) || (atom1 == atom4) || (atom2 == atom3) || (atom2 == atom4) ||
+      (atom3 == atom4))
+    error->all(FLERR, fileiarg, "Invalid atom ID in {}", location);
+  if ((itype <= 0) || (domain->box_exist && (itype > atom->ndihedraltypes)))
+    error->all(FLERR, fileiarg, "Invalid dihedral type in {}", location);
+
+  if (flag) {
+    m = atom2 - 1;
+    ndihedraltypes = MAX(ndihedraltypes, itype);
+    dihedral_type[m][num_dihedral[m]] = itype;
+    dihedral_atom1[m][num_dihedral[m]] = atom1;
+    dihedral_atom2[m][num_dihedral[m]] = atom2;
+    dihedral_atom3[m][num_dihedral[m]] = atom3;
+    dihedral_atom4[m][num_dihedral[m]] = atom4;
+    num_dihedral[m]++;
+    if (newton_bond == 0) {
+      m = atom1 - 1;
+      dihedral_type[m][num_dihedral[m]] = itype;
+      dihedral_atom1[m][num_dihedral[m]] = atom1;
+      dihedral_atom2[m][num_dihedral[m]] = atom2;
+      dihedral_atom3[m][num_dihedral[m]] = atom3;
+      dihedral_atom4[m][num_dihedral[m]] = atom4;
+      num_dihedral[m]++;
+      m = atom3 - 1;
+      dihedral_type[m][num_dihedral[m]] = itype;
+      dihedral_atom1[m][num_dihedral[m]] = atom1;
+      dihedral_atom2[m][num_dihedral[m]] = atom2;
+      dihedral_atom3[m][num_dihedral[m]] = atom3;
+      dihedral_atom4[m][num_dihedral[m]] = atom4;
+      num_dihedral[m]++;
+      m = atom4 - 1;
+      dihedral_type[m][num_dihedral[m]] = itype;
+      dihedral_atom1[m][num_dihedral[m]] = atom1;
+      dihedral_atom2[m][num_dihedral[m]] = atom2;
+      dihedral_atom3[m][num_dihedral[m]] = atom3;
+      dihedral_atom4[m][num_dihedral[m]] = atom4;
+      num_dihedral[m]++;
+    }
+  } else {
+    count[atom2 - 1]++;
+    if (newton_bond == 0) {
+      count[atom1 - 1]++;
+      count[atom3 - 1]++;
+      count[atom4 - 1]++;
+    }
+  }
+}
+
+/* ----------------------------------------------------------------------
+   read dihedrals from file
    if flag = 0, just count dihedrals/atom
    if flag = 1, store them with atoms
 ------------------------------------------------------------------------- */
@@ -1240,10 +1360,8 @@ void Molecule::angles(int flag, char *line)
 void Molecule::dihedrals(int flag, char *line)
 {
   const std::string location = "Dihedrals section of molecule file";
-  int itype;
-  tagint m, atom1, atom2, atom3, atom4;
+  tagint atom1, atom2, atom3, atom4;
   std::string typestr;
-  int newton_bond = force->newton_bond;
 
   if (flag == 0)
     for (int i = 0; i < natoms; i++) count[i] = 0;
@@ -1263,78 +1381,13 @@ void Molecule::dihedrals(int flag, char *line)
     if (nwords != 6) error->all(FLERR, fileiarg, "Invalid format in {}: {}", location, utils::trim(line));
 
     typestr = utils::utf8_subst(values[1]);
-    switch (utils::is_type(typestr)) {
-      case 0: {    // numeric
-        itype = utils::inumeric(FLERR, typestr, false, lmp);
-        itype += doffset;
-        break;
-      }
-      case 1: {    // type label
-        if (!atom->labelmapflag)
-          error->all(FLERR, fileiarg, "Invalid dihedral type {} in {}: {}", typestr, location, utils::trim(line));
-        itype = atom->lmap->find(typestr, Atom::DIHEDRAL);
-        if (itype == -1)
-          error->all(FLERR, fileiarg, "Unknown dihedral type {} in {}: {}", typestr, location, utils::trim(line));
-        break;
-      }
-      default:    // invalid
-        error->one(FLERR, fileiarg, "Invalid format in {}: {}", location, utils::trim(line));
-        break;
-    }
 
     atom1 = utils::tnumeric(FLERR, values[2], false, lmp);
     atom2 = utils::tnumeric(FLERR, values[3], false, lmp);
     atom3 = utils::tnumeric(FLERR, values[4], false, lmp);
     atom4 = utils::tnumeric(FLERR, values[5], false, lmp);
 
-    if ((atom1 <= 0) || (atom1 > natoms) || (atom2 <= 0) || (atom2 > natoms) || (atom3 <= 0) ||
-        (atom3 > natoms) || (atom4 <= 0) || (atom4 > natoms) || (atom1 == atom2) ||
-        (atom1 == atom3) || (atom1 == atom4) || (atom2 == atom3) || (atom2 == atom4) ||
-        (atom3 == atom4))
-      error->all(FLERR, fileiarg, "Invalid atom ID in {}: {}", location, utils::trim(line));
-    if ((itype <= 0) || (domain->box_exist && (itype > atom->ndihedraltypes)))
-      error->all(FLERR, fileiarg, "Invalid dihedral type in {}: {}", location, utils::trim(line));
-
-    if (flag) {
-      m = atom2 - 1;
-      ndihedraltypes = MAX(ndihedraltypes, itype);
-      dihedral_type[m][num_dihedral[m]] = itype;
-      dihedral_atom1[m][num_dihedral[m]] = atom1;
-      dihedral_atom2[m][num_dihedral[m]] = atom2;
-      dihedral_atom3[m][num_dihedral[m]] = atom3;
-      dihedral_atom4[m][num_dihedral[m]] = atom4;
-      num_dihedral[m]++;
-      if (newton_bond == 0) {
-        m = atom1 - 1;
-        dihedral_type[m][num_dihedral[m]] = itype;
-        dihedral_atom1[m][num_dihedral[m]] = atom1;
-        dihedral_atom2[m][num_dihedral[m]] = atom2;
-        dihedral_atom3[m][num_dihedral[m]] = atom3;
-        dihedral_atom4[m][num_dihedral[m]] = atom4;
-        num_dihedral[m]++;
-        m = atom3 - 1;
-        dihedral_type[m][num_dihedral[m]] = itype;
-        dihedral_atom1[m][num_dihedral[m]] = atom1;
-        dihedral_atom2[m][num_dihedral[m]] = atom2;
-        dihedral_atom3[m][num_dihedral[m]] = atom3;
-        dihedral_atom4[m][num_dihedral[m]] = atom4;
-        num_dihedral[m]++;
-        m = atom4 - 1;
-        dihedral_type[m][num_dihedral[m]] = itype;
-        dihedral_atom1[m][num_dihedral[m]] = atom1;
-        dihedral_atom2[m][num_dihedral[m]] = atom2;
-        dihedral_atom3[m][num_dihedral[m]] = atom3;
-        dihedral_atom4[m][num_dihedral[m]] = atom4;
-        num_dihedral[m]++;
-      }
-    } else {
-      count[atom2 - 1]++;
-      if (newton_bond == 0) {
-        count[atom1 - 1]++;
-        count[atom3 - 1]++;
-        count[atom4 - 1]++;
-      }
-    }
+    store_dihedral(flag, typestr, atom1, atom2, atom3, atom4);
   }
 
   // dihedral_per_atom = max of count vector
@@ -1346,8 +1399,89 @@ void Molecule::dihedrals(int flag, char *line)
 }
 
 /* ----------------------------------------------------------------------
-   read impropers from file
    store each with all 4 atoms if newton_bond = 0
+   if flag = 0, just update count impropers/atom
+   if flag = 1, store them with atoms
+------------------------------------------------------------------------- */
+
+void Molecule::store_improper(int flag, std::string typestr, tagint atom1, tagint atom2, tagint atom3, tagint atom4)
+{
+  const std::string location = "Impropers section of molecule file";
+  int itype;
+  tagint m;
+  int newton_bond = force->newton_bond;
+
+  switch (utils::is_type(typestr)) {
+    case 0: {    // numeric
+      itype = utils::inumeric(FLERR, typestr, false, lmp);
+      itype += ioffset;
+      break;
+    }
+    case 1: {    // type label
+      if (!atom->labelmapflag)
+        error->all(FLERR, fileiarg, "Invalid improper type {} in {}", typestr, location);
+      itype = atom->lmap->find(typestr, Atom::IMPROPER);
+      if (itype == -1)
+        error->all(FLERR, fileiarg, "Unknown improper type {} in {}", typestr, location);
+      break;
+    }
+    default:    // invalid
+      error->one(FLERR, fileiarg, "Invalid format in {}", location);
+      break;
+  }
+
+  if ((atom1 <= 0) || (atom1 > natoms) || (atom2 <= 0) || (atom2 > natoms) || (atom3 <= 0) ||
+      (atom3 > natoms) || (atom4 <= 0) || (atom4 > natoms) || (atom1 == atom2) ||
+      (atom1 == atom3) || (atom1 == atom4) || (atom2 == atom3) || (atom2 == atom4) ||
+      (atom3 == atom4))
+    error->all(FLERR, fileiarg, "Invalid atom ID in {}", location);
+  if ((itype <= 0) || (domain->box_exist && (itype > atom->nimpropertypes)))
+    error->all(FLERR, fileiarg, "Invalid improper type in {}", location);
+
+  if (flag) {
+    m = atom2 - 1;
+    nimpropertypes = MAX(nimpropertypes, itype);
+    improper_type[m][num_improper[m]] = itype;
+    improper_atom1[m][num_improper[m]] = atom1;
+    improper_atom2[m][num_improper[m]] = atom2;
+    improper_atom3[m][num_improper[m]] = atom3;
+    improper_atom4[m][num_improper[m]] = atom4;
+    num_improper[m]++;
+    if (newton_bond == 0) {
+      m = atom1 - 1;
+      improper_type[m][num_improper[m]] = itype;
+      improper_atom1[m][num_improper[m]] = atom1;
+      improper_atom2[m][num_improper[m]] = atom2;
+      improper_atom3[m][num_improper[m]] = atom3;
+      improper_atom4[m][num_improper[m]] = atom4;
+      num_improper[m]++;
+      m = atom3 - 1;
+      improper_type[m][num_improper[m]] = itype;
+      improper_atom1[m][num_improper[m]] = atom1;
+      improper_atom2[m][num_improper[m]] = atom2;
+      improper_atom3[m][num_improper[m]] = atom3;
+      improper_atom4[m][num_improper[m]] = atom4;
+      num_improper[m]++;
+      m = atom4 - 1;
+      improper_type[m][num_improper[m]] = itype;
+      improper_atom1[m][num_improper[m]] = atom1;
+      improper_atom2[m][num_improper[m]] = atom2;
+      improper_atom3[m][num_improper[m]] = atom3;
+      improper_atom4[m][num_improper[m]] = atom4;
+      num_improper[m]++;
+    }
+  } else {
+    count[atom2 - 1]++;
+    if (newton_bond == 0) {
+      count[atom1 - 1]++;
+      count[atom3 - 1]++;
+      count[atom4 - 1]++;
+    }
+  }
+}
+
+/* ----------------------------------------------------------------------
+   read impropers from file
    if flag = 0, just count impropers/atom
    if flag = 1, store them with atoms
 ------------------------------------------------------------------------- */
@@ -1355,10 +1489,8 @@ void Molecule::dihedrals(int flag, char *line)
 void Molecule::impropers(int flag, char *line)
 {
   const std::string location = "Impropers section of molecule file";
-  int itype;
-  tagint m, atom1, atom2, atom3, atom4;
+  tagint atom1, atom2, atom3, atom4;
   std::string typestr;
-  int newton_bond = force->newton_bond;
 
   if (flag == 0)
     for (int i = 0; i < natoms; i++) count[i] = 0;
@@ -1378,78 +1510,13 @@ void Molecule::impropers(int flag, char *line)
     if (nwords != 6) error->all(FLERR, fileiarg, "Invalid format in {}: {}", location, utils::trim(line));
 
     typestr = utils::utf8_subst(values[1]);
-    switch (utils::is_type(typestr)) {
-      case 0: {    // numeric
-        itype = utils::inumeric(FLERR, typestr, false, lmp);
-        itype += ioffset;
-        break;
-      }
-      case 1: {    // type label
-        if (!atom->labelmapflag)
-          error->all(FLERR, fileiarg, "Invalid improper type {} in {}: {}", typestr, location, utils::trim(line));
-        itype = atom->lmap->find(typestr, Atom::IMPROPER);
-        if (itype == -1)
-          error->all(FLERR, fileiarg, "Unknown improper type {} in {}: {}", typestr, location, utils::trim(line));
-        break;
-      }
-      default:    // invalid
-        error->one(FLERR, fileiarg, "Invalid format in {}: {}", location, utils::trim(line));
-        break;
-    }
 
     atom1 = utils::tnumeric(FLERR, values[2], false, lmp);
     atom2 = utils::tnumeric(FLERR, values[3], false, lmp);
     atom3 = utils::tnumeric(FLERR, values[4], false, lmp);
     atom4 = utils::tnumeric(FLERR, values[5], false, lmp);
 
-    if ((atom1 <= 0) || (atom1 > natoms) || (atom2 <= 0) || (atom2 > natoms) || (atom3 <= 0) ||
-        (atom3 > natoms) || (atom4 <= 0) || (atom4 > natoms) || (atom1 == atom2) ||
-        (atom1 == atom3) || (atom1 == atom4) || (atom2 == atom3) || (atom2 == atom4) ||
-        (atom3 == atom4))
-      error->all(FLERR, fileiarg, "Invalid atom ID in {}: {}", location, utils::trim(line));
-    if ((itype <= 0) || (domain->box_exist && (itype > atom->nimpropertypes)))
-      error->all(FLERR, fileiarg, "Invalid improper type in {}: {}", location, utils::trim(line));
-
-    if (flag) {
-      m = atom2 - 1;
-      nimpropertypes = MAX(nimpropertypes, itype);
-      improper_type[m][num_improper[m]] = itype;
-      improper_atom1[m][num_improper[m]] = atom1;
-      improper_atom2[m][num_improper[m]] = atom2;
-      improper_atom3[m][num_improper[m]] = atom3;
-      improper_atom4[m][num_improper[m]] = atom4;
-      num_improper[m]++;
-      if (newton_bond == 0) {
-        m = atom1 - 1;
-        improper_type[m][num_improper[m]] = itype;
-        improper_atom1[m][num_improper[m]] = atom1;
-        improper_atom2[m][num_improper[m]] = atom2;
-        improper_atom3[m][num_improper[m]] = atom3;
-        improper_atom4[m][num_improper[m]] = atom4;
-        num_improper[m]++;
-        m = atom3 - 1;
-        improper_type[m][num_improper[m]] = itype;
-        improper_atom1[m][num_improper[m]] = atom1;
-        improper_atom2[m][num_improper[m]] = atom2;
-        improper_atom3[m][num_improper[m]] = atom3;
-        improper_atom4[m][num_improper[m]] = atom4;
-        num_improper[m]++;
-        m = atom4 - 1;
-        improper_type[m][num_improper[m]] = itype;
-        improper_atom1[m][num_improper[m]] = atom1;
-        improper_atom2[m][num_improper[m]] = atom2;
-        improper_atom3[m][num_improper[m]] = atom3;
-        improper_atom4[m][num_improper[m]] = atom4;
-        num_improper[m]++;
-      }
-    } else {
-      count[atom2 - 1]++;
-      if (newton_bond == 0) {
-        count[atom1 - 1]++;
-        count[atom3 - 1]++;
-        count[atom4 - 1]++;
-      }
-    }
+    store_improper(flag, typestr, atom1, atom2, atom3, atom4);
   }
 
   // improper_per_atom = max of count vector

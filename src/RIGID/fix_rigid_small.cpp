@@ -473,6 +473,8 @@ FixRigidSmall::FixRigidSmall(LAMMPS *lmp, int narg, char **arg) :
 
 FixRigidSmall::~FixRigidSmall()
 {
+  if(copymode) return;
+
   // unregister callbacks to this fix from Atom class
 
   if (modify->get_fix_by_id(id)) atom->delete_callback(id,Atom::GROW);
@@ -3318,6 +3320,11 @@ void FixRigidSmall::unpack_reverse_comm(int n, int *list, double *buf)
       torque[0] += buf[m++];
       torque[1] += buf[m++];
       torque[2] += buf[m++];
+
+      /*
+      printf("rank %d atom %d body %d fcm %.2f %.2f %.2f\n",
+          comm->me, j, bodyown[j], fcm[0], fcm[1], fcm[2]);
+      */
     }
 
   } else if (commflag == VCM_ANGMOM) {

@@ -202,6 +202,9 @@ void AtomKokkos::sort()
 {
   // check if all fixes with atom-based arrays support sort on device
 
+  // avoid permanent change to sort_classic based on current flags
+  int sort_classic = this->sort_classic;
+
   if (!sort_classic) {
     int flag = 1;
     for (int iextra = 0; iextra < atom->nextra_grow; iextra++) {

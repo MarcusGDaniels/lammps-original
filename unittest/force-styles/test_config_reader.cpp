@@ -59,6 +59,15 @@ TestConfigReader::TestConfigReader(TestConfig &config) : config(config)
 
     consumers["global_scalar"] = &TestConfigReader::global_scalar;
     consumers["global_vector"] = &TestConfigReader::global_vector;
+    consumers["global_array"] = &TestConfigReader::global_array;
+    consumers["peratom_vector"] = &TestConfigReader::peratom_vector;
+    consumers["peratom_array"] = &TestConfigReader::peratom_array;
+    consumers["local_vector"] = &TestConfigReader::local_vector;
+    consumers["local_array"] = &TestConfigReader::local_array;
+    consumers["pergrid_name"] = &TestConfigReader::pergrid_name;
+    consumers["pergrid_data"] = &TestConfigReader::pergrid_data;
+    consumers["pergrid_vector"] = &TestConfigReader::pergrid_vector;
+    consumers["pergrid_array"] = &TestConfigReader::pergrid_array;
 
     consumers["bond_style"]     = &TestConfigReader::bond_style;
     consumers["bond_coeff"]     = &TestConfigReader::bond_coeff;
@@ -377,12 +386,130 @@ void TestConfigReader::global_vector(const yaml_event_t &event)
 {
     std::stringstream data((char *)event.data.scalar.value);
     config.global_vector.clear();
-    double value;
     std::size_t num;
     data >> num;
     for (std::size_t i = 0; i < num; ++i) {
+        double value;
         data >> value;
         config.global_vector.push_back(value);
+    }
+}
+
+void TestConfigReader::global_array(const yaml_event_t &event)
+{
+    std::stringstream data((char *)event.data.scalar.value);
+    config.global_array.clear();
+    std::size_t nrows, ncols;
+    data >> nrows >>ncols;
+    for (std::size_t i = 0; i < nrows; ++i) {
+        std::vector<double> array_data;
+        for (std::size_t j = 0; j < ncols; ++j) {
+            double value;
+            data >> value;
+            array_data.push_back(value);
+        }
+        config.global_array.push_back(std::move(array_data));
+    }
+}
+
+void TestConfigReader::peratom_vector(const yaml_event_t &event)
+{
+    std::stringstream data((char *)event.data.scalar.value);
+    config.peratom_vector.clear();
+    for (std::size_t i = 0; i < config.natoms; ++i) {
+        int index;
+        double value;
+        data >> index;
+        data >> value;
+        config.peratom_vector.push_back(std::make_pair(index, value));
+    }
+}
+
+void TestConfigReader::peratom_array(const yaml_event_t &event)
+{
+    std::stringstream data((char *)event.data.scalar.value);
+    config.peratom_array.clear();
+    std::size_t ncols;
+    data >> ncols;
+    for (std::size_t i = 0; i < config.natoms; ++i) {
+        std::pair<int, std::vector<double>> array_data;
+        data >> array_data.first;
+        for (std::size_t j = 0; j < ncols; ++j) {
+            double value;
+            data >> value;
+            array_data.second.push_back(value);
+        }
+        config.peratom_array.push_back(std::move(array_data));
+    }
+}
+
+void TestConfigReader::local_vector(const yaml_event_t &event)
+{
+    std::stringstream data((char *)event.data.scalar.value);
+    config.local_vector.clear();
+    std::size_t num;
+    data >> num;
+    for (std::size_t i = 0; i < num; ++i) {
+        double value;
+        data >> value;
+        config.local_vector.push_back(value);
+    }
+}
+
+void TestConfigReader::local_array(const yaml_event_t &event)
+{
+    std::stringstream data((char *)event.data.scalar.value);
+    config.local_array.clear();
+    std::size_t nrows, ncols;
+    data >> nrows >> ncols;
+    for (std::size_t i = 0; i < nrows; ++i) {
+        std::vector<double> array_data;
+        for (std::size_t j = 0; j < ncols; ++j) {
+            double value;
+            data >> value;
+            array_data.push_back(value);
+        }
+        config.local_array.push_back(std::move(array_data));
+    }
+}
+
+void TestConfigReader::pergrid_name(const yaml_event_t &event)
+{
+    config.pergrid_name = (char *)event.data.scalar.value;
+}
+
+void TestConfigReader::pergrid_data(const yaml_event_t &event)
+{
+    config.pergrid_data = (char *)event.data.scalar.value;
+}
+
+void TestConfigReader::pergrid_vector(const yaml_event_t &event)
+{
+    std::stringstream data((char *)event.data.scalar.value);
+    config.pergrid_vector.clear();
+    std::size_t dimension, nx, ny, nz;
+    data >> dimension >> nx >> ny >> nz;
+    for (std::size_t i = 0; i < nx*ny*nz; ++i) {
+        double value;
+        data >> value;
+        config.pergrid_vector.push_back(value);
+    }
+}
+
+void TestConfigReader::pergrid_array(const yaml_event_t &event)
+{
+    std::stringstream data((char *)event.data.scalar.value);
+    config.pergrid_array.clear();
+    std::size_t dimension, nx, ny, nz, nvalues;
+    data >> dimension >> nx >> ny >> nz >> nvalues;
+    for (std::size_t i = 0; i < nx*ny*nz; ++i) {
+        std::vector<double> array_data;
+        for (std::size_t n = 0; n < nvalues; ++n) {
+            double value;
+            data >> value;
+            array_data.push_back(value);
+        }
+        config.pergrid_array.push_back(std::move(array_data));
     }
 }
 

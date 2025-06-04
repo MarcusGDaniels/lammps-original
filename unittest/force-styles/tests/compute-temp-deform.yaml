@@ -1,0 +1,18 @@
+---
+lammps_version: 2 Apr 2025
+tags: generated
+date_generated: Mon May 12 15:12:30 2025
+epsilon: 1e-15
+skip_tests:
+prerequisites: ! |
+  atom full
+  compute temp/deform
+pre_commands: ! ""
+post_commands: ! |
+  compute test solute temp/deform
+input_file: in.fourmol
+natoms: 29
+global_scalar: 24.062280650878606
+global_vector: ! |-
+  6 0.5787878852271744 0.8978555523696383 0.8185593780850904 0.3051431575109786 -0.027630638466753333 0.29129231796593424
+...

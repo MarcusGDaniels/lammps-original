@@ -1,0 +1,19 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "default",
+      "hidden": false,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/../build",
+      "cacheVariables": {
+        "BUILD_ALL": "OFF",
+        "PKG_SPIN": "ON",
+        "PKG_KOKKOS": "ON",
+        "Kokkos_ENABLE_SERIAL": "ON",
+        "BUILD_MPI": "OFF"
+      }
+    }
+  ]
+}
+

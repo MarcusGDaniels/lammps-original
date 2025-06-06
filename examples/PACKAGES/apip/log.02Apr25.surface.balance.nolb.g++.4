@@ -1,0 +1,108 @@
+LAMMPS (2 Apr 2025 - Development - )
+Reading data file ...
+  orthogonal box = (0 0 -1.1656272) to (36.15 36.15 362.81506)
+  1 by 1 by 4 MPI processor grid
+  reading atoms ...
+  40200 atoms
+  reading velocities ...
+  40200 velocities
+  read_data CPU = 0.851 seconds
+200 atoms in group group_ignore_csp
+ACE version: 2023.11.25
+Recursive evaluator is used by ACE
+Loading ../../../potentials/Cu-PBE-core-rep.ace
+Total number of basis functions
+	Cu: 16 (r=1) 726 (r>1)
+Mapping LAMMPS atom type #1(Cu) -> ACE species type #0
+atomic load lambda:
+	fast potential: extract eam/apip:time_per_atom
+	precise potential: extract pace/apip:time_per_atom
+	lambda_input: extract lambda_input:time_per_atom
+	lambda: extract lambda_zone:time_per_atom
+
+CITE-CITE-CITE-CITE-CITE-CITE-CITE-CITE-CITE-CITE-CITE-CITE-CITE
+
+Your simulation uses code contributions which should be cited:
+- fix lambda command: doi.org/10.1063/5.0245877
+The log file lists these citations in BibTeX format.
+
+CITE-CITE-CITE-CITE-CITE-CITE-CITE-CITE-CITE-CITE-CITE-CITE-CITE
+
+Neighbor list info ...
+  update: every = 1 steps, delay = 0 steps, check = yes
+  max neighbors/atom: 2000, page size: 100000
+  master list distance cutoff = 14
+  ghost atom cutoff = 14
+  binsize = 7, bins = 6 6 52
+  5 neighbor lists, perpetual/occasional/extra = 5 0 0
+  (1) pair eam/fs/apip, perpetual
+      attributes: full, newton on
+      pair build: full/bin/atomonly
+      stencil: full/bin/3d
+      bin: standard
+  (2) pair pace/apip, perpetual, trim from (4)
+      attributes: full, newton on, cut 9.4
+      pair build: trim
+      stencil: none
+      bin: none
+  (3) pair lambda_input/csp, perpetual, trim from (2)
+      attributes: full, newton on, cut 8
+      pair build: trim
+      stencil: none
+      bin: none
+  (4) pair lambda/zone, perpetual
+      attributes: full, newton on, ghost, cut 14
+      pair build: full/bin/ghost
+      stencil: full/ghost/bin/3d
+      bin: standard
+  (5) fix lambda_thermostat, perpetual, copy from (1)
+      attributes: full, newton on
+      pair build: copy
+      stencil: none
+      bin: none
+Setting up Verlet run ...
+  Unit style    : metal
+  Current step  : 0
+  Time step     : 0.001
+Per MPI rank memory allocation (min/avg/max) = 297.9 | 306.9 | 315.9 Mbytes
+   Step       f_balance        S/CPU      f_weight_atom[1] f_weight_atom[2] f_weight_atom[3] f_weight_atom[4]
+         0   1.0139303      0              0              0              0              0            
+        10   2.5936737      1.6405928      6.7824918e-06  0.00027531978  2.814652e-06   5.9865269e-06
+        20   2.2558534      1.5527601      6.4904884e-06  0.00029719004  3.0359118e-06  6.7329455e-06
+        30   2.1128983      1.7144878      5.9457369e-06  0.00028945144  3.1335213e-06  5.2179065e-06
+        40   2.1152337      1.6830798      5.989262e-06   0.00029175311  3.1649722e-06  6.0691653e-06
+        50   2.2297953      1.3546017      7.3810871e-06  0.00033032216  3.5174346e-06  7.4769821e-06
+        60   2.0952565      1.3215714      7.6969247e-06  0.00037389329  4.1371414e-06  6.8809259e-06
+        70   2.1496717      1.2703756      7.8880654e-06  0.00037854516  4.1491207e-06  8.9745666e-06
+        80   2.1004757      1.35167        7.4906788e-06  0.00036672479  4.0278388e-06  6.6668909e-06
+        90   2.100907       1.3516626      7.5277653e-06  0.00036663236  4.0151159e-06  6.6169414e-06
+       100   2.0989737      1.3387615      7.5571579e-06  0.00036855287  4.049062e-06   6.6754202e-06
+Loop time of 69.3965 on 4 procs for 100 steps with 40200 atoms
+
+Performance: 0.125 ns/day, 192.768 hours/ns, 1.441 timesteps/s, 57.928 katom-step/s
+99.8% CPU use with 4 MPI tasks x no OpenMP threads
+
+MPI task timing breakdown:
+Section |  min time  |  avg time  |  max time  |%varavg| %total
+---------------------------------------------------------------
+Pair    | 10.345     | 22.59      | 58.791     | 439.8 | 32.55
+Neigh   | 8.2397     | 8.843      | 9.4357     |  17.7 | 12.74
+Comm    | 0.18526    | 24.065     | 47.415     | 472.2 | 34.68
+Output  | 0.00050178 | 0.90609    | 3.5672     | 161.4 |  1.31
+Modify  | 1.427      | 2.7563     | 6.0058     | 114.3 |  3.97
+Other   |            | 10.24      |            |       | 14.75
+
+Nlocal:          10050 ave       10180 max       10000 min
+Histogram: 2 1 0 0 0 0 0 0 0 1
+Nghost:        27854.5 ave       30385 max       25525 min
+Histogram: 2 0 0 0 0 0 0 0 0 2
+Neighs:              0 ave           0 max           0 min
+Histogram: 4 0 0 0 0 0 0 0 0 0
+FullNghs:  9.49222e+06 ave 9.76687e+06 max 9.29466e+06 min
+Histogram: 2 0 0 0 0 0 1 0 0 1
+
+Total # of neighbors = 37968882
+Ave neighs/atom = 944.49955
+Neighbor list builds = 10
+Dangerous builds = 0
+Total wall time: 0:01:13

@@ -10,7 +10,6 @@
         "BUILD_ALL": "OFF",
         "PKG_SPIN": "ON",
         "PKG_KOKKOS": "ON",
-        "Kokkos_ENABLE_SERIAL": "ON",
         "BUILD_MPI": "OFF"
       }
     }

@@ -47,6 +47,7 @@ class FixNeighborSwap : public Fix {
   int niswap, njswap;                  // # of i,j swap atoms on all procs
   int niswap_local, njswap_local;      // # of swap atoms on this proc
   int niswap_before, njswap_before;    // # of swap atoms on procs < this proc
+
   class Region *region;    // swap region
   char *idregion;          // swap region id
 
@@ -87,7 +88,8 @@ class FixNeighborSwap : public Fix {
   int attempt_swap();
   double energy_full();
   int pick_i_swap_atom();
-  int pick_j_swap_neighbor();
+  // TODO: parameter not used
+  int pick_j_swap_neighbor(int);
   void build_i_neighbor_list(int);
   void update_iswap_atoms_list();
 };
